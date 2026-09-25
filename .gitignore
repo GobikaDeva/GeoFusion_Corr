@@ -1,0 +1,10 @@
+# Datasets and derived priors (26 GB)
+data/DTU/
+data/DTU_test/
+# Training runs: checkpoints, logs, eval outputs
+runs/
+# Python / tooling
+__pycache__/
+*.pyc
+.pytest_cache/
+.claude/

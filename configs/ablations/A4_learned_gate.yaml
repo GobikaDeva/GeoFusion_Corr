@@ -1,0 +1,21 @@
+# A4: A3 + learned reliability gate. Tests adaptive geometry influence -- this is the
+# same model as configs/stage3_learned_gate.yaml, and the base for A5/A6/N1/N2.
+stage_name: A4_learned_gate
+output_root: runs
+model:
+  backbone: {in_channels: 3, geometry_channels: 4, base_channels: 32, use_ggf_residual: true, ggf_stage_index: 0}
+  geocorr:
+    enabled: true
+    use_learned_gate: true
+    use_extended_cues: false
+    score_convention: higher_is_better
+    apply_stages: [fine, mid]
+data: {root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU, gt_root: /home/gobika/Research_Gobika/dtu_groundtruth, n_views: 5, img_wh: [640, 512], num_depth: 192, depth_interval: 2.65, num_workers: 4, geometry_prior: mono_sparse}
+training: {batch_size: 2, lr: 0.001, max_steps: 24000, max_epochs: 16, log_every: 50, ckpt_every: 2000}
+alpha_schedule: {warmup_steps: 2000, ramp_steps: 8000, alpha_max: 1.0}
+gate_schedule: {warmup_steps: 2000, ramp_steps: 10000, gate_min_ceiling: 0.0, gate_max: 0.10}
+prior_dropout: {dropout_prob: 0.25, noise_std: 0.05}
+loss: {type: compact_self_supervised, use_geo_term: true, geo_weight: 0.5}
+# Published DTU numbers (and GeoMVSNet's test.py) use the full-res dtu-test images:
+# 1600x1200 resized to the multiple-of-64 fit 1600x1152. Training stays at 640x512.
+eval: {test_data: {root: /home/gobika/Research_Gobika/GeoFusionNet/datasets/dtu-test-1200, layout: test, img_wh: [1600, 1152], prior_root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU_test/MonoPrior}}
