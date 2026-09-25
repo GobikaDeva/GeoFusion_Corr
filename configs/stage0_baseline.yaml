@@ -10,6 +10,13 @@ model:
     geometry_channels: 4
     base_channels: 32
     use_ggf_residual: false
+    # Cost-volume bug fixes (2026-09-25), baseline corrections rather than research
+    # contributions: drop out-of-view source samples from the variance instead of
+    # counting zero-padded features, and replace the stride-2 ConvTranspose3d
+    # (sawtooth probabilities) with trilinear upsampling + conv. Checkpoints trained
+    # before this (runs/A0_baseline) need both flags off to load/evaluate.
+    mask_out_of_view: true
+    reg_upsample: trilinear
   geocorr:
     enabled: false
 

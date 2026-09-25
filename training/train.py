@@ -178,8 +178,16 @@ def main():
         # Fine-tuning: start from another run's weights (fresh optimizer/LR schedule).
         init_from = cfg["training"].get("init_from")
         if init_from:
-            model.load_state_dict(torch.load(init_from, map_location=args.device)["model"])
-            print(f"initialized weights from {init_from}", flush=True)
+            state = torch.load(init_from, map_location=args.device)["model"]
+            # Parameters whose shape changed with the architecture (e.g. the
+            # regularizer's `up` layer under reg_upsample: trilinear) start fresh;
+            # anything else missing or unexpected is still an error.
+            own = model.state_dict()
+            reinit = sorted(k for k, v in state.items() if k in own and own[k].shape != v.shape)
+            result = model.load_state_dict({k: v for k, v in state.items() if k not in reinit}, strict=False)
+            if result.unexpected_keys or set(result.missing_keys) != set(reinit):
+                raise RuntimeError(f"init_from {init_from}: missing {result.missing_keys}, unexpected {result.unexpected_keys}")
+            print(f"initialized weights from {init_from}" + (f" (re-initialized {reinit})" if reinit else ""), flush=True)
 
         # Optional validation depth curve (off unless training.val_every > 0).
         val_every = cfg["training"].get("val_every", 0)

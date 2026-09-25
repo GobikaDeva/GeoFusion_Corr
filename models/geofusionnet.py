@@ -48,6 +48,15 @@ class GeoFusionNetConfig:
     ])
     use_ggf_residual: bool = False       # Stage 1: zero-initialized GGF residual
     ggf_stage_index: int = 0             # apply GGF at one low-resolution feature level
+    # Exclude a source view from the cost-volume variance at (depth, pixel) samples
+    # that project outside its image, instead of counting the zero-padded feature
+    # as a real observation. Samples seen by <2 views get the pixel's mean cost over
+    # its valid depths (flat, uninformative).
+    mask_out_of_view: bool = False
+    # 3D regularizer upsampling: "deconv" (ConvTranspose3d, original), "deconv_smooth"
+    # (plus a fixed [1,2,1] blur that removes stride-2 checkerboarding; no new
+    # parameters), or "trilinear" (trilinear upsample + 3x3x3 conv; new weights).
+    reg_upsample: str = "deconv"
 
 
 class RGBEncoder(nn.Module):
@@ -123,23 +132,47 @@ class GGFResidualFusion(nn.Module):
         return rgb_feat + residual
 
 
+def _blur121_3d(x: torch.Tensor) -> torch.Tensor:
+    """Separable [1, 2, 1] / 4 blur along D, H and W (replicate-padded)."""
+    k = x.new_tensor([0.25, 0.5, 0.25])
+    C = x.shape[1]
+    for dim in range(3):
+        shape = [1, 1, 1, 1, 1]
+        shape[2 + dim] = 3
+        pad = [0] * 6
+        pad[2 * (2 - dim)] = pad[2 * (2 - dim) + 1] = 1
+        x = F.conv3d(F.pad(x, pad, mode="replicate"), k.view(shape).expand(C, 1, *shape[2:]).contiguous(), groups=C)
+    return x
+
+
 class CostRegularizer3D(nn.Module):
     """Lightweight 3D U-Net style regularizer over the (D, H, W) cost volume."""
 
-    def __init__(self, in_channels: int = 1, base_channels: int = 8):
+    def __init__(self, in_channels: int = 1, base_channels: int = 8, upsample: str = "deconv"):
         super().__init__()
+        if upsample not in ("deconv", "deconv_smooth", "trilinear"):
+            raise ValueError(f"Unknown reg_upsample: {upsample}")
+        self.upsample = upsample
         c = base_channels
         self.conv0 = nn.Sequential(nn.Conv3d(in_channels, c, 3, padding=1), nn.BatchNorm3d(c), nn.ReLU(inplace=True))
         self.conv1 = nn.Sequential(nn.Conv3d(c, c * 2, 3, stride=2, padding=1), nn.BatchNorm3d(c * 2), nn.ReLU(inplace=True))
         self.conv2 = nn.Sequential(nn.Conv3d(c * 2, c, 3, padding=1), nn.BatchNorm3d(c), nn.ReLU(inplace=True))
-        self.up = nn.ConvTranspose3d(c, c, kernel_size=2, stride=2)
+        if upsample == "trilinear":
+            self.up = nn.Conv3d(c, c, 3, padding=1)
+        else:
+            self.up = nn.ConvTranspose3d(c, c, kernel_size=2, stride=2)
         self.out = nn.Conv3d(c, 1, 3, padding=1)
 
     def forward(self, cost_volume: torch.Tensor) -> torch.Tensor:
         x0 = self.conv0(cost_volume)
         x1 = self.conv1(x0)
         x2 = self.conv2(x1)
-        x2 = self.up(x2)
+        if self.upsample == "trilinear":
+            x2 = self.up(F.interpolate(x2, size=x0.shape[-3:], mode="trilinear", align_corners=False))
+        else:
+            x2 = self.up(x2)
+            if self.upsample == "deconv_smooth":
+                x2 = _blur121_3d(x2)
         if x2.shape[-3:] != x0.shape[-3:]:
             x2 = F.interpolate(x2, size=x0.shape[-3:], mode="trilinear", align_corners=False)
         return self.out(x0 + x2).squeeze(1)  # (B, D, H, W) matching score volume
@@ -150,7 +183,8 @@ def differentiable_homography_warp(
     src_proj: torch.Tensor,
     ref_proj: torch.Tensor,
     depth_hypotheses: torch.Tensor,
-) -> torch.Tensor:
+    return_valid: bool = False,
+):
     """Plane-sweep warp of a source feature map into the reference view.
 
     This is the canonical MVSNet-family plane-sweep homography warp. It is the SAME
@@ -171,7 +205,9 @@ def differentiable_homography_warp(
             stage's estimate).
 
     Returns:
-        (B, C, D, H, W) warped source features, one slice per depth hypothesis.
+        (B, C, D, H, W) warped source features, one slice per depth hypothesis; with
+        `return_valid`, also a (B, 1, D, H, W) float mask of samples that land inside
+        the source image in front of the camera.
     """
     B, C, H, W = src_feat.shape
     D = depth_hypotheses.shape[1]
@@ -207,7 +243,14 @@ def differentiable_homography_warp(
     warped = F.grid_sample(
         src_feat, grid, mode="bilinear", padding_mode="zeros", align_corners=True
     )  # (B, C, D*H, W)
-    return warped.view(B, C, D, H, W)
+    warped = warped.view(B, C, D, H, W)
+    if not return_valid:
+        return warped
+    with torch.no_grad():
+        valid = (
+            (proj_x_norm.abs() <= 1) & (proj_y_norm.abs() <= 1) & (proj_xyz[:, 2, :, :] > 1e-3)
+        ).float().view(B, 1, D, H, W)
+    return warped, valid
 
 
 def regress_depth(score_volume: torch.Tensor, depth_hypotheses: torch.Tensor) -> torch.Tensor:
@@ -250,7 +293,7 @@ class GeoFusionNet(nn.Module):
             self.ggf_stage_name = stage_name
 
         self.regularizers = nn.ModuleDict({
-            stage.name: CostRegularizer3D() for stage in cfg.stages
+            stage.name: CostRegularizer3D(upsample=cfg.reg_upsample) for stage in cfg.stages
         })
 
     COST_VOLUME_DEPTH_CHUNK = 8
@@ -263,7 +306,7 @@ class GeoFusionNet(nn.Module):
         src_projs: List[torch.Tensor],
         depth_hypotheses: torch.Tensor,
     ) -> torch.Tensor:
-        """Variance-based cost volume from ref/src warped features (group-wise correlation).
+        """Variance-based cost volume from ref/src warped features, averaged over channels.
 
         The unbiased variance across views is accumulated from running sums rather
         than by stacking every warped volume, so only a couple of (B, C, D, H, W)
@@ -273,21 +316,43 @@ class GeoFusionNet(nn.Module):
         """
         chunk = self.COST_VOLUME_DEPTH_CHUNK
         if not torch.is_grad_enabled() and depth_hypotheses.shape[1] > chunk:
-            return torch.cat([
-                self.build_cost_volume(ref_feat, src_feats, ref_proj, src_projs, depth_hypotheses[:, d:d + chunk])
+            parts = [
+                self._cost_volume_chunk(ref_feat, src_feats, ref_proj, src_projs, depth_hypotheses[:, d:d + chunk])
                 for d in range(0, depth_hypotheses.shape[1], chunk)
-            ], dim=2)
+            ]
+            volume = torch.cat([p[0] for p in parts], dim=2)
+            n = torch.cat([p[1] for p in parts], dim=2) if self.cfg.mask_out_of_view else None
+        else:
+            volume, n = self._cost_volume_chunk(ref_feat, src_feats, ref_proj, src_projs, depth_hypotheses)
+        if n is not None:
+            ok = n >= 2
+            fill = (volume * ok).sum(dim=2, keepdim=True) / ok.sum(dim=2, keepdim=True).clamp(min=1)
+            volume = torch.where(ok, volume, fill)
+        return volume
+
+    def _cost_volume_chunk(self, ref_feat, src_feats, ref_proj, src_projs, depth_hypotheses):
+        """Returns ((B, 1, D, H, W) channel-mean variance, per-sample view count or None)."""
         ref_expanded = ref_feat.unsqueeze(2).expand(-1, -1, depth_hypotheses.shape[1], -1, -1)
         vol_sum = ref_expanded
         vol_sq_sum = ref_expanded ** 2
+        if not self.cfg.mask_out_of_view:
+            for sf, sp in zip(src_feats, src_projs):
+                warped = differentiable_homography_warp(sf, sp, ref_proj, depth_hypotheses)
+                vol_sum = vol_sum + warped
+                vol_sq_sum = vol_sq_sum + warped ** 2
+                del warped
+            n = len(src_feats) + 1
+            volume = (vol_sq_sum - vol_sum ** 2 / n) / (n - 1)  # (B, C, D, H, W), == stack(...).var(dim=0)
+            return volume.mean(dim=1, keepdim=True), None  # (B, 1, D, H, W) group-wise reduced
+        n = torch.ones_like(ref_expanded[:, :1])
         for sf, sp in zip(src_feats, src_projs):
-            warped = differentiable_homography_warp(sf, sp, ref_proj, depth_hypotheses)
-            vol_sum = vol_sum + warped
-            vol_sq_sum = vol_sq_sum + warped ** 2
+            warped, valid = differentiable_homography_warp(sf, sp, ref_proj, depth_hypotheses, return_valid=True)
+            vol_sum = vol_sum + warped * valid
+            vol_sq_sum = vol_sq_sum + warped ** 2 * valid
+            n = n + valid
             del warped
-        n = len(src_feats) + 1
-        volume = (vol_sq_sum - vol_sum ** 2 / n) / (n - 1)  # (B, C, D, H, W), == stack(...).var(dim=0)
-        return volume.mean(dim=1, keepdim=True)  # (B, 1, D, H, W) group-wise reduced
+        volume = (vol_sq_sum - vol_sum ** 2 / n) / (n - 1).clamp(min=1)  # unbiased variance over valid views
+        return volume.mean(dim=1, keepdim=True), n
 
     @staticmethod
     def _scale_projection(proj: torch.Tensor, scale: float) -> torch.Tensor:
