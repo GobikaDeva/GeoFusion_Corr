@@ -47,6 +47,7 @@ from typing import Optional
 import cv2
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from .camera_io import build_projection_matrix, read_cam_file
@@ -119,6 +120,10 @@ class DTUDataset(Dataset):
             raise ValueError(f"Unknown geometry_prior: {self.geometry_prior}")
         self.prior_root = cfg.get("prior_root", os.path.join(root, "MonoPrior"))
 
+        # Build CL-MVSNet consistency inputs (set by training/train.py when
+        # loss.consistency is enabled).
+        self.consistency = cfg.get("consistency", False)
+        self.all_src_views = {}  # ref view -> every pair.txt source view, best first
         self.metas = self._build_metas()
 
     def _scan_list(self) -> list:
@@ -147,7 +152,8 @@ class DTUDataset(Dataset):
             for _ in range(num_viewpoints):
                 ref_view = int(f.readline().rstrip())
                 src_views_line = f.readline().rstrip().split()
-                src_views = [int(x) for x in src_views_line[1::2]][: self.n_views - 1]
+                self.all_src_views[ref_view] = [int(x) for x in src_views_line[1::2]]
+                src_views = self.all_src_views[ref_view][: self.n_views - 1]
                 if len(src_views) < self.n_views - 1:
                     continue  # not enough source views for this ref view; skip
                 view_pairs.append((ref_view, src_views))
@@ -212,6 +218,45 @@ class DTUDataset(Dataset):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         return img  # (H, W, 3) uint8, native resolution
 
+    def _to_tensor(self, img: np.ndarray) -> torch.Tensor:
+        """(H, W, 3) uint8 at native resolution -> (3, h, w) float in [-1, 1] at img_wh."""
+        resized = cv2.resize(img, self.img_wh, interpolation=cv2.INTER_LINEAR)
+        normalized = (resized.astype(np.float32) / 255.0 - 0.5) / 0.5
+        return torch.from_numpy(normalized).permute(2, 0, 1)
+
+    def _consistency_inputs(self, scan, ref_view, light, raw_images, scale) -> dict:
+        """Inputs for the CL-MVSNet consistency passes (models/losses.py; adopted from
+        CL-MVSNet, arXiv 2503.08219, datasets/dtu_cl.py).
+
+        icc_inputs: the same views, each independently ColorJitter(brightness=1,
+          contrast=1, saturation=0.5, hue=0.5) then gamma in U(0.5, 2). The source
+          pixel dropout and reference box are applied per batch in
+          training/train.py::make_consistency_fn, as CL-MVSNet does in its forward.
+        scc_inputs: a fresh random 4 (n_views - 1) of all pair.txt source views,
+          same lighting, clean images.
+        """
+        from torchvision.transforms import ColorJitter
+
+        jitter = ColorJitter(brightness=1, contrast=1, saturation=0.5, hue=0.5)
+        aug = []
+        for img in raw_images:
+            x = jitter(torch.from_numpy(img).permute(2, 0, 1).float() / 255.0)
+            x = x.clamp(0, 1) ** np.random.uniform(0.5, 2.0)
+            x = F.interpolate(x[None], size=self.img_wh[::-1], mode="bilinear", align_corners=False)[0]
+            aug.append((x - 0.5) / 0.5)
+
+        pool = self.all_src_views[ref_view]
+        scc_views = [pool[i] for i in torch.randperm(len(pool))[: self.n_views - 1].tolist()]
+        scc_imgs = [self._to_tensor(self._load_image(self._image_path(scan, v, light))) for v in scc_views]
+        scc_projs = [
+            torch.from_numpy(build_projection_matrix(c["intrinsic"], c["extrinsic"], scale=scale))
+            for c in (read_cam_file(self._cam_path(v)) for v in scc_views)
+        ]
+        return {
+            "icc_inputs": {"ref_img": aug[0], "src_imgs": aug[1:]},
+            "scc_inputs": {"src_imgs": scc_imgs, "src_projs": scc_projs},
+        }
+
     def __getitem__(self, idx: int) -> dict:
         scan, ref_view, src_views = self.metas[idx]
         views = [ref_view] + list(src_views)
@@ -239,11 +284,7 @@ class DTUDataset(Dataset):
             )
             assert abs(scale[0] - scale[1]) < 0.05, f"img_wh {self.img_wh} distorts the image by >5%"
 
-        images = []
-        for img in raw_images:
-            resized = cv2.resize(img, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-            normalized = (resized.astype(np.float32) / 255.0 - 0.5) / 0.5  # [-1, 1]
-            images.append(torch.from_numpy(normalized).permute(2, 0, 1))  # (3, H, W)
+        images = [self._to_tensor(img) for img in raw_images]
 
         cams = [read_cam_file(self._cam_path(v)) for v in views]
         # The model rescales per cascade stage internally (see
@@ -292,6 +333,9 @@ class DTUDataset(Dataset):
             "depth_min": depth_min,
             "depth_interval": depth_interval,
         }
+
+        if self.consistency and self.split == "train":
+            sample.update(self._consistency_inputs(scan, ref_view, light, raw_images, scale))
 
         if prior_depth is not None:
             sample["prior_depth"] = prior_depth

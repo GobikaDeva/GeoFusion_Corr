@@ -137,7 +137,7 @@ def probe_view(model, sample, device, wrong_mm):
     in_range = (gt_c > hyps[0] - step / 2) & (gt_c < hyps[-1] + step / 2)
     valid = (gt_c > 0) & in_range
 
-    res = {}
+    res = {"n_valid": int(valid.sum())}
     for name, mask in (("wrong", valid & (err_c > wrong_mm)), ("right", valid & (err_c < 1.0))):
         ys, xs = torch.nonzero(mask, as_tuple=True)
         if ys.numel() == 0:
@@ -184,16 +184,25 @@ def probe_view(model, sample, device, wrong_mm):
 
 
 def summarize(results):
-    out = {}
+    n_valid = sum(r["n_valid"] for r in results)
+    out = {"n_valid_pixels": n_valid}
     for name in ("wrong", "right"):
         rs = [r[name] for r in results if name in r]
         cat = lambda k: np.concatenate([r[k] for r in rs])  # noqa: E731
         s = {"n_pixels": int(len(cat("raw_mean_class")))}
+        s["pct_of_valid"] = 100 * s["n_pixels"] / max(n_valid, 1)
         for k in ("raw_mean_class", "best2_class"):
             c = cat(k)
             s[k] = {"gt_global_min_pct": 100 * float((c == 0).mean()),
                     "gt_secondary_min_pct": 100 * float((c == 1).mean()),
                     "no_min_at_gt_pct": 100 * float((c == 2).mean())}
+        # the same classes as a share of ALL valid in-range GT pixels, which (unlike
+        # the shares above) is comparable across models with different wrong sets
+        c = cat("raw_mean_class")
+        s["raw_mean_class_pct_of_valid"] = {
+            "gt_secondary_min": 100 * float((c == 1).sum()) / max(n_valid, 1),
+            "no_min_at_gt": 100 * float((c == 2).sum()) / max(n_valid, 1),
+        }
         s["reg_argmax_at_gt_pct"] = 100 * float(cat("reg_argmax_ok").mean())
         s["reg_mean_mass_near_gt"] = float(cat("reg_mass_near_gt").mean())
         s["sawtooth_pct"] = 100 * float(cat("sawtooth").mean())

@@ -170,6 +170,48 @@ def supervised_l1_loss(pred_depth: torch.Tensor, gt_depth: torch.Tensor, mask: t
     return F.l1_loss(pred_depth[mask], gt_depth[mask])
 
 
+# --- CL-MVSNet consistency terms (baseline correction, NOT a GeoCorr Lite contribution)
+#
+# Adopted from CL-MVSNet (Xiong et al., "CL-MVSNet: Unsupervised Multi-View Stereo
+# with Dual-Level Contrastive Learning", arXiv 2503.08219; reference code
+# ~/Research_Gobika/cl_mvsnet_eval: loss.py ICCLossMultiStage / SCCLossMultiStage,
+# networks/clmvsnet.py RegressionDepth and CLMVSNet.forward). This is a correction
+# to our unsupervised baseline and MUST be cited as CL-MVSNet's in the paper; it is
+# not part of GeoCorr Lite. Off by default (loss.consistency.enabled);
+# training/train.py wires it up.
+#
+# Mechanism: the clean forward pass's FINAL-stage depth (detached) is a pseudo label
+# for every stage of two extra forward passes of the same network:
+#   ICC -- color-jittered/gamma-shifted views, source pixels randomly zeroed, and a
+#          random H/3 x W/3 box of the reference zeroed; supervised on every pixel
+#          outside that box (no confidence threshold).
+#   SCC -- clean images but a different random 4 of the 10 pair.txt source views;
+#          supervised where the clean pass's final-stage confidence > 0.95.
+# Both use smooth L1 in depth units, stage weights 0.5/1/2.
+
+def cascade_photometric_confidence(score_volume: torch.Tensor) -> torch.Tensor:
+    """CL-MVSNet / CasMVSNet confidence: softmax probability mass in the 4 bins
+    [i-1, i+2] around i = floor(expected bin index). (B, D, H, W) -> (B, 1, H, W)."""
+    prob = F.softmax(score_volume, dim=1)
+    D = prob.shape[1]
+    sum4 = 4 * F.avg_pool3d(F.pad(prob.unsqueeze(1), pad=(0, 0, 0, 0, 1, 2)), (4, 1, 1), stride=1).squeeze(1)
+    bins = torch.arange(D, device=prob.device, dtype=prob.dtype).view(1, -1, 1, 1)
+    index = (prob * bins).sum(dim=1, keepdim=True).long().clamp(0, D - 1)
+    return sum4.gather(1, index)
+
+
+def consistency_depth_loss(pred_depth: torch.Tensor, pseudo_depth: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """Smooth L1 (beta 1, depth units) between one stage's depth (B, 1, h, w) and the
+    full-resolution pseudo label (B, 1, H, W), over `mask` (B, 1, H, W). Label and
+    mask are nearest-downsampled to the stage, as in CL-MVSNet."""
+    size = pred_depth.shape[-2:]
+    pseudo = F.interpolate(pseudo_depth, size=size, mode="nearest")
+    keep = F.interpolate(mask.float(), size=size, mode="nearest") > 0.5
+    if keep.sum() == 0:
+        return pred_depth.sum() * 0.0
+    return F.smooth_l1_loss(pred_depth[keep], pseudo[keep])
+
+
 # --- Deferred objectives (Stage 5 / full-GeoCorr comparison only; NOT used in
 #     baseline recovery, Stages 0-4) -------------------------------------------------
 

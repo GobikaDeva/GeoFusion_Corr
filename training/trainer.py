@@ -81,9 +81,15 @@ class Trainer:
             self.writer.add_scalar(f"gate/{region}_mean", vals.mean().item(), step)
             self.writer.add_scalar(f"gate/{region}_std", vals.std().item(), step)
 
-    def train_step(self, batch, step: int, loss_fn, region_masks_fn=None) -> dict:
+    def train_step(self, batch, step: int, loss_fn, region_masks_fn=None, consistency_fn=None) -> dict:
         """One optimizer step. `batch` is a batch dict, or a list of
-        `grad_accum_steps` micro-batch dicts whose gradients are accumulated."""
+        `grad_accum_steps` micro-batch dicts whose gradients are accumulated.
+
+        `consistency_fn(forward, outputs, batch, step)` (optional, see
+        training/train.py::make_consistency_fn) yields extra losses, each from its own
+        forward pass; each is backpropagated as soon as it is yielded so only one
+        pass's graph is alive at a time. Its pseudo labels are detached, so the
+        gradient equals that of the summed loss."""
         self.model.train()
         alpha = self.alpha_schedule.value(step)
         max_gate = self.gate_schedule.value(step)
@@ -96,17 +102,26 @@ class Trainer:
         self.optimizer.zero_grad(set_to_none=True)
         total = 0.0
         for batch in micro_batches:
-            outputs = self.model(**batch["model_inputs"], alpha=alpha, max_gate=max_gate, stages=self.cfg.stages)
+            def forward(**overrides):
+                return self.model(**{**batch["model_inputs"], **overrides}, alpha=alpha, max_gate=max_gate, stages=self.cfg.stages)
+
+            outputs = forward()
             loss = loss_fn(outputs, batch) / len(micro_batches)
             loss.backward()
             total += loss.item()
+            if consistency_fn is not None:
+                for aux_loss in consistency_fn(forward, outputs, batch, step):
+                    aux_loss = aux_loss / len(micro_batches)
+                    aux_loss.backward()
+                    total += aux_loss.item()
         self.optimizer.step()
         step_time = time.time() - t0
 
         if step % self.cfg.log_every == 0:
             self.writer.add_scalar("train/loss", total, step)
-            for name, value in getattr(loss_fn, "components", {}).items():
-                self.writer.add_scalar(f"train/{name}", value, step)
+            for fn in (loss_fn, consistency_fn):
+                for name, value in getattr(fn, "components", {}).items():
+                    self.writer.add_scalar(f"train/{name}", value, step)
             self.writer.add_scalar("schedule/alpha", alpha, step)
             self.writer.add_scalar("schedule/max_gate", max_gate, step)
             self.writer.add_scalar("schedule/lr", lr, step)

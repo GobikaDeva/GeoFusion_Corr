@@ -1,0 +1,42 @@
+# A0c_consistency_short: short test of CL-MVSNet's consistency loss (ICC + SCC; see
+# models/losses.py -- adopted from CL-MVSNet, arXiv 2503.08219, must be cited as
+# theirs) on the corrected baseline. Question: does it cut the ambiguous / no-dip
+# share of wrong pixels on scan1 + scan48 (scripts/costvol_profile_probe.py)? Not a
+# full retrain.
+# Starts from A0_finetune_clmvs seed2 (the model the probe baseline was measured on),
+# with A0_corrected's cost-volume fixes; the regularizers' `up` layers start fresh
+# (trilinear replaces the deconv). Same LR recipe as A0_finetune_clmvs, shortened.
+stage_name: A0c_consistency_short
+output_root: runs
+model:
+  backbone: {in_channels: 3, geometry_channels: 4, base_channels: 32, use_ggf_residual: false,
+             mask_out_of_view: true, reg_upsample: trilinear}
+  geocorr: {enabled: false}
+data: {root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU, gt_root: /home/gobika/Research_Gobika/dtu_groundtruth, n_views: 5, img_wh: [640, 512], num_depth: 192, depth_interval: 2.65, num_workers: 6, geometry_prior: mono_sparse,
+       lighting_conditions: [0, 1, 2, 3, 4, 5, 6]}
+training:
+  init_from: runs/A0_finetune_clmvs/seed2/ckpt_final.pt
+  batch_size: 2
+  grad_accum_steps: 2
+  lr: 0.0005
+  warmup_steps: 100
+  max_steps: 1500
+  max_epochs: 1000
+  log_every: 50
+  ckpt_every: 500
+  val_every: 500
+  val_view_stride: 1
+loss:
+  type: compact_self_supervised
+  use_geo_term: true
+  geo_weight: 0.5
+  consistency:
+    enabled: true
+    # CL-MVSNet's weights (w_icc 0.01 -> 0.32 doubling at its epochs 1/3/5/7/9,
+    # w_scc 0.01) x 0.0163 loss-scale ratio, its p_icc (ramped to 0.1) and SCC
+    # confidence 0.95; schedules span max_steps (training/train.py::make_consistency_fn).
+    icc_weight_start: 0.000163
+    icc_weight: 0.0052
+    icc_src_drop_p: 0.1
+    scc_weight: 0.000163
+    scc_conf: 0.95
