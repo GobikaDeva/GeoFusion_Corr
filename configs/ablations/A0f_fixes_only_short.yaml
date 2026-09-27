@@ -4,6 +4,7 @@
 # Originally the control for A0c_consistency_short: identical config with the
 # consistency loss OFF. A0c vs A0f showed no gain from consistency, so it was dropped
 # (NOTES.md). Full-res 3-seed eval: scripts/eval_stage0_a0f.sh.
+# configs/stage0_baseline.yaml is the long-form copy (tests/test_stage0_config.py).
 stage_name: A0f_fixes_only_short
 output_root: runs
 model:

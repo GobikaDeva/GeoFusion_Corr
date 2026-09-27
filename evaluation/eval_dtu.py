@@ -2,12 +2,12 @@
 """Evaluate a trained checkpoint on DTU and check it against the acceptance gates.
 
 Usage:
-    python -m evaluation.eval_dtu --config configs/stage0_baseline.yaml --ckpt runs/stage0_baseline/seed0/ckpt_final.pt
+    python -m evaluation.eval_dtu --config configs/stage0_baseline.yaml --ckpt runs/A0f_fixes_only_short/seed0/ckpt_final.pt
     python -m evaluation.eval_dtu --config configs/ablations/A3_geocorr_fixed.yaml \\
         --ckpt runs/A3_geocorr_fixed/seed0/ckpt_final.pt --baseline_stats baseline_stats.json
 
 `--baseline_stats` should be the JSON produced by running this script on Stage 0
-(A0) across >=3 seeds (see training/seed_utils.aggregate_over_seeds) -- required to
+(A0f) across >=3 seeds (scripts/eval_stage0_a0f.sh) -- required to
 evaluate the "Baseline parity" and "Efficiency" gates for any later stage.
 """
 from __future__ import annotations

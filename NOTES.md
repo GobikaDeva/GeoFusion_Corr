@@ -2,8 +2,8 @@
 
 ## Stage 0 baseline (frozen 2026-09-27): A0f
 
-The Stage 0 baseline is `configs/ablations/A0f_fixes_only_short.yaml`. It is the end of a
-three-step chain per seed N:
+The Stage 0 baseline is `configs/ablations/A0f_fixes_only_short.yaml`, which
+`configs/stage0_baseline.yaml` mirrors. It is the end of a three-step chain per seed N:
 
 1. `A0_baseline` seedN: 20k steps, constant lr 1e-3, pre-fix cost volume.
 2. `A0_finetune_clmvs` seedN: 6k steps with CL-MVSNet's LR recipe.

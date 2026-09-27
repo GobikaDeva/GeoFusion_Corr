@@ -1,7 +1,13 @@
-# Stage 0: reproduce the reference GeoMVS baseline. No GeoCorr, no GGF residual.
-# Advance to Stage 1 only when this checkpoint is confirmed within normal training
-# variation across >=3 seeds (docs/baseline_recovery_plan.md).
-stage_name: stage0_baseline
+# Stage 0: the frozen baseline (2026-09-27) = configs/ablations/A0f_fixes_only_short.yaml,
+# written out long-form. No GeoCorr, no GGF residual. The two files must stay identical
+# (tests/test_stage0_config.py); stage_name is A0f's so both point at the same runs.
+# Chain per seed N (NOTES.md):
+#   A0_baseline seedN          20k steps, constant lr 1e-3, pre-fix cost volume
+#   A0_finetune_clmvs seedN    6k steps, CL-MVSNet LR recipe
+#   this config seedN          1500 steps with the cost-volume fixes
+# Official numbers: scripts/eval_stage0_a0f.sh (1600x1152, 22 scans, 3 seeds) ->
+# runs/A0f_fixes_only_short/aggregated_1600x1152.json, the --baseline_stats for later stages.
+stage_name: A0f_fixes_only_short
 output_root: runs
 
 model:
@@ -27,21 +33,29 @@ data:
   img_wh: [640, 512]
   num_depth: 192
   depth_interval: 2.65
-  num_workers: 4
+  num_workers: 6
   geometry_prior: mono_sparse     # metric mono+sparse prior G (scripts/anchor_mono_prior.py)
+  lighting_conditions: [0, 1, 2, 3, 4, 5, 6]
 
 training:
+  init_from: runs/A0_finetune_clmvs/seed{seed}/ckpt_final.pt   # regularizer `up` layers start fresh
   batch_size: 2
-  lr: 0.001
-  max_steps: 20000
-  max_epochs: 16
+  grad_accum_steps: 2             # effective batch 4
+  lr: 0.0005
+  warmup_steps: 100
+  max_steps: 1500
+  max_epochs: 1000
   log_every: 50
-  ckpt_every: 2000
+  ckpt_every: 500
+  val_every: 500                  # DTU val split (18 scans x 49 views, lighting 3)
+  val_view_stride: 1
 
 loss:
   type: compact_self_supervised   # models/losses.py::compact_self_supervised_loss
   use_geo_term: true              # L_geo is part of GeoFusionNet's published objective
   geo_weight: 0.5
+  consistency:
+    enabled: false                # CL-MVSNet ICC+SCC: no gain over this control (NOTES.md)
 
 eval:
   # Published DTU numbers (and GeoMVSNet's test.py) use the full-res dtu-test images:

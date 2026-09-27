@@ -1,5 +1,5 @@
-# A0_corrected: A0_baseline plus the two cost-volume bug fixes (2026-09-25), now the
-# Stage 0 default (configs/stage0_baseline.yaml): out-of-view source samples are
+# A0_corrected: A0_baseline plus the two cost-volume bug fixes (2026-09-25), which the
+# Stage 0 baseline (configs/stage0_baseline.yaml = A0f) also uses: out-of-view source samples are
 # excluded from the variance, and the regularizer upsamples trilinearly instead of
 # with a stride-2 ConvTranspose3d. Everything else matches A0_baseline, whose runs
 # (runs/A0_baseline) predate the fixes and keep its config.
