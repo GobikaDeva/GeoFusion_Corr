@@ -267,8 +267,10 @@ def main():
         )
 
         # Fine-tuning: start from another run's weights (fresh optimizer/LR schedule).
+        # A "{seed}" placeholder chains per-seed runs (seedN inits from seedN).
         init_from = cfg["training"].get("init_from")
         if init_from:
+            init_from = init_from.format(seed=seed)
             state = torch.load(init_from, map_location=args.device)["model"]
             # Parameters whose shape changed with the architecture (e.g. the
             # regularizer's `up` layer under reg_upsample: trilinear) start fresh;

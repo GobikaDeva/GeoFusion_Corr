@@ -1,4 +1,4 @@
-# A0_finetune_clmvs: fine-tune A0_baseline seed2 (ckpt_final, 20k steps at constant
+# A0_finetune_clmvs: fine-tune A0_baseline seedN (ckpt_final, 20k steps at constant
 # lr 1e-3) with CL-MVSNet's LR recipe (arXiv 2503.08219 §4.2: Adam lr 5e-4, halved
 # at epochs 10/12/14 of 16 -> here at 60%/75%/90% of the run), after A0's loss and
 # DTU-val depth error plateaued from 2k to 20k steps at constant LR.
@@ -11,7 +11,7 @@ model:
 data: {root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU, gt_root: /home/gobika/Research_Gobika/dtu_groundtruth, n_views: 5, img_wh: [640, 512], num_depth: 192, depth_interval: 2.65, num_workers: 4, geometry_prior: mono_sparse,
        lighting_conditions: [0, 1, 2, 3, 4, 5, 6]}
 training:
-  init_from: runs/A0_baseline/seed2/ckpt_final.pt
+  init_from: runs/A0_baseline/seed{seed}/ckpt_final.pt
   batch_size: 2
   grad_accum_steps: 2
   lr: 0.0005
