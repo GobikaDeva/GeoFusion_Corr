@@ -273,13 +273,19 @@ def main():
             init_from = init_from.format(seed=seed)
             state = torch.load(init_from, map_location=args.device)["model"]
             # Parameters whose shape changed with the architecture (e.g. the
-            # regularizer's `up` layer under reg_upsample: trilinear) start fresh;
+            # regularizer's `up` layer under reg_upsample: trilinear) start fresh, as do
+            # modules the source run did not have, listed by key prefix in
+            # training.init_new_modules (e.g. the zero-initialized GGF residual);
             # anything else missing or unexpected is still an error.
             own = model.state_dict()
             reinit = sorted(k for k, v in state.items() if k in own and own[k].shape != v.shape)
+            new_prefixes = tuple(cfg["training"].get("init_new_modules", []))
+            new = sorted(k for k in own if k not in state and new_prefixes and k.startswith(new_prefixes))
             result = model.load_state_dict({k: v for k, v in state.items() if k not in reinit}, strict=False)
-            if result.unexpected_keys or set(result.missing_keys) != set(reinit):
+            if result.unexpected_keys or set(result.missing_keys) != set(reinit) | set(new):
                 raise RuntimeError(f"init_from {init_from}: missing {result.missing_keys}, unexpected {result.unexpected_keys}")
+            if new:
+                print(f"new modules kept at their init: {new}", flush=True)
             print(f"initialized weights from {init_from}" + (f" (re-initialized {reinit})" if reinit else ""), flush=True)
 
         # Optional validation depth curve (off unless training.val_every > 0).
