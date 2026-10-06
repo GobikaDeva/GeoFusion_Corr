@@ -57,6 +57,21 @@ class GeoFusionNetConfig:
     # (plus a fixed [1,2,1] blur that removes stride-2 checkerboarding; no new
     # parameters), or "trilinear" (trilinear upsample + 3x3x3 conv; new weights).
     reg_upsample: str = "deconv"
+    # Capacity options (defaults = the original architecture, which A0f uses).
+    # encoder: "basic" (one conv per level) or "fpn" (wider bottom-up path with
+    # fpn_widths channels, 2-3 convs per level, plus a top-down FPN path; outputs keep
+    # the basic encoder's base_channels * (1, 2, 4) so the cost volume shapes match).
+    encoder: str = "basic"
+    fpn_widths: List[int] = field(default_factory=lambda: [32, 96, 192])
+    fpn_inner: int = 64  # top-down path width (it runs at full resolution for 5 views)
+    # Cost-volume channels: 1 = variance averaged over all feature channels (original);
+    # G > 1 = group-wise variance, averaged within G equal channel groups (G channels
+    # into the regularizer).
+    cost_groups: int = 1
+    # 3D regularizer: reg_levels 1 = the original CostRegularizer3D (base 8);
+    # 2 = CostRegularizerUNet3D with two down/up levels (trilinear upsampling only).
+    reg_base_channels: int = 8
+    reg_levels: int = 1
 
 
 class RGBEncoder(nn.Module):
@@ -80,6 +95,49 @@ class RGBEncoder(nn.Module):
         f1 = self.down1(f0)     # 1/2 res
         f2 = self.down2(f1)     # 1/4 res
         return {"fine": f0, "mid": f1, "coarse": f2}
+
+
+def _conv_bn_relu(cin: int, cout: int, stride: int = 1) -> nn.Sequential:
+    return nn.Sequential(nn.Conv2d(cin, cout, 3, stride=stride, padding=1, bias=False),
+                         nn.BatchNorm2d(cout), nn.ReLU(inplace=True))
+
+
+class FPNEncoder(nn.Module):
+    """Wider 3-level RGB pyramid with a top-down FPN path (CasMVSNet FeatureNet style).
+
+    Bottom-up: `widths` channels at 1, 1/2, 1/4 resolution (2, 3, 3 convs). Top-down:
+    1x1 laterals into `inner` channels, nearest-upsampled and summed, then a
+    3x3 output conv per level to out_channels * (1, 2, 4) for fine / mid / coarse.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, widths: List[int], inner: int):
+        super().__init__()
+        w0, w1, w2 = widths
+        self.level0 = nn.Sequential(_conv_bn_relu(in_channels, w0), _conv_bn_relu(w0, w0))
+        self.level1 = nn.Sequential(_conv_bn_relu(w0, w1, 2), _conv_bn_relu(w1, w1), _conv_bn_relu(w1, w1))
+        self.level2 = nn.Sequential(_conv_bn_relu(w1, w2, 2), _conv_bn_relu(w2, w2), _conv_bn_relu(w2, w2))
+        self.lat2 = nn.Conv2d(w2, inner, 1)
+        self.lat1 = nn.Conv2d(w1, inner, 1)
+        self.lat0 = nn.Conv2d(w0, inner, 1)
+        self.out2 = nn.Conv2d(inner, out_channels * 4, 3, padding=1)
+        self.out1 = nn.Conv2d(inner, out_channels * 2, 3, padding=1)
+        self.out0 = nn.Conv2d(inner, out_channels, 3, padding=1)
+
+    def forward(self, x: torch.Tensor):
+        c0 = self.level0(x)
+        c1 = self.level1(c0)
+        c2 = self.level2(c1)
+        p2 = self.lat2(c2)
+        p1 = self.lat1(c1) + F.interpolate(p2, size=c1.shape[-2:], mode="nearest")
+        if self.training and torch.is_grad_enabled():
+            # full-res top-down step recomputed in backward (no BatchNorm in it, so exact)
+            fine = checkpoint(self._fine, c0, p1, use_reentrant=False)
+        else:
+            fine = self._fine(c0, p1)
+        return {"fine": fine, "mid": self.out1(p1), "coarse": self.out2(p2)}
+
+    def _fine(self, c0: torch.Tensor, p1: torch.Tensor) -> torch.Tensor:
+        return self.out0(self.lat0(c0) + F.interpolate(p1, size=c0.shape[-2:], mode="nearest"))
 
 
 class GeometryEncoder(nn.Module):
@@ -176,6 +234,38 @@ class CostRegularizer3D(nn.Module):
         if x2.shape[-3:] != x0.shape[-3:]:
             x2 = F.interpolate(x2, size=x0.shape[-3:], mode="trilinear", align_corners=False)
         return self.out(x0 + x2).squeeze(1)  # (B, D, H, W) matching score volume
+
+
+def _conv3d_bn_relu(cin: int, cout: int, stride: int = 1) -> nn.Sequential:
+    return nn.Sequential(nn.Conv3d(cin, cout, 3, stride=stride, padding=1, bias=False),
+                         nn.BatchNorm3d(cout), nn.ReLU(inplace=True))
+
+
+class CostRegularizerUNet3D(nn.Module):
+    """Larger 3D U-Net regularizer: `levels` stride-2 down/up levels, channels
+    base * 2**level, trilinear upsampling + 3x3x3 conv, additive skips."""
+
+    def __init__(self, in_channels: int, base_channels: int = 16, levels: int = 2):
+        super().__init__()
+        c = base_channels
+        self.levels = levels
+        self.conv0 = _conv3d_bn_relu(in_channels, c)
+        self.down = nn.ModuleList([
+            nn.Sequential(_conv3d_bn_relu(c * 2 ** i, c * 2 ** (i + 1), 2), _conv3d_bn_relu(c * 2 ** (i + 1), c * 2 ** (i + 1)))
+            for i in range(levels)
+        ])
+        self.up = nn.ModuleList([_conv3d_bn_relu(c * 2 ** (i + 1), c * 2 ** i) for i in range(levels)])
+        self.out = nn.Conv3d(c, 1, 3, padding=1)
+
+    def forward(self, cost_volume: torch.Tensor) -> torch.Tensor:
+        skips = [self.conv0(cost_volume)]
+        for down in self.down:
+            skips.append(down(skips[-1]))
+        x = skips.pop()
+        for i in reversed(range(self.levels)):
+            skip = skips.pop()
+            x = skip + self.up[i](F.interpolate(x, size=skip.shape[-3:], mode="trilinear", align_corners=False))
+        return self.out(x).squeeze(1)  # (B, D, H, W) matching score volume
 
 
 def differentiable_homography_warp(
@@ -278,7 +368,14 @@ class GeoFusionNet(nn.Module):
     def __init__(self, cfg: GeoFusionNetConfig):
         super().__init__()
         self.cfg = cfg
-        self.rgb_encoder = RGBEncoder(cfg.in_channels, cfg.base_channels)
+        if cfg.encoder == "basic":
+            self.rgb_encoder = RGBEncoder(cfg.in_channels, cfg.base_channels)
+        elif cfg.encoder == "fpn":
+            self.rgb_encoder = FPNEncoder(cfg.in_channels, cfg.base_channels, cfg.fpn_widths, cfg.fpn_inner)
+        else:
+            raise ValueError(f"Unknown encoder: {cfg.encoder}")
+        if any((cfg.base_channels * k) % cfg.cost_groups for k in (1, 2, 4)):
+            raise ValueError(f"cost_groups {cfg.cost_groups} must divide every stage's feature channels")
         self.geometry_encoder = GeometryEncoder(cfg.geometry_channels, cfg.base_channels)
 
         self.ggf_fusion = None
@@ -292,9 +389,13 @@ class GeoFusionNet(nn.Module):
             self.ggf_fusion = GGFResidualFusion(stage_channels[stage_name])
             self.ggf_stage_name = stage_name
 
-        self.regularizers = nn.ModuleDict({
-            stage.name: CostRegularizer3D(upsample=cfg.reg_upsample) for stage in cfg.stages
-        })
+        if cfg.reg_levels == 1:
+            make_reg = lambda: CostRegularizer3D(cfg.cost_groups, cfg.reg_base_channels, upsample=cfg.reg_upsample)  # noqa: E731
+        else:
+            if cfg.reg_upsample != "trilinear":
+                raise ValueError("reg_levels > 1 supports reg_upsample: trilinear only")
+            make_reg = lambda: CostRegularizerUNet3D(cfg.cost_groups, cfg.reg_base_channels, cfg.reg_levels)  # noqa: E731
+        self.regularizers = nn.ModuleDict({stage.name: make_reg() for stage in cfg.stages})
 
     COST_VOLUME_DEPTH_CHUNK = 8
 
@@ -306,7 +407,8 @@ class GeoFusionNet(nn.Module):
         src_projs: List[torch.Tensor],
         depth_hypotheses: torch.Tensor,
     ) -> torch.Tensor:
-        """Variance-based cost volume from ref/src warped features, averaged over channels.
+        """Variance-based cost volume from ref/src warped features, averaged over channels
+        (or within cfg.cost_groups channel groups): (B, cost_groups, D, H, W).
 
         The unbiased variance across views is accumulated from running sums rather
         than by stacking every warped volume, so only a couple of (B, C, D, H, W)
@@ -331,7 +433,7 @@ class GeoFusionNet(nn.Module):
         return volume
 
     def _cost_volume_chunk(self, ref_feat, src_feats, ref_proj, src_projs, depth_hypotheses):
-        """Returns ((B, 1, D, H, W) channel-mean variance, per-sample view count or None)."""
+        """Returns ((B, G, D, H, W) group-mean variance, per-sample view count or None)."""
         ref_expanded = ref_feat.unsqueeze(2).expand(-1, -1, depth_hypotheses.shape[1], -1, -1)
         vol_sum = ref_expanded
         vol_sq_sum = ref_expanded ** 2
@@ -343,7 +445,7 @@ class GeoFusionNet(nn.Module):
                 del warped
             n = len(src_feats) + 1
             volume = (vol_sq_sum - vol_sum ** 2 / n) / (n - 1)  # (B, C, D, H, W), == stack(...).var(dim=0)
-            return volume.mean(dim=1, keepdim=True), None  # (B, 1, D, H, W) group-wise reduced
+            return self._group_mean(volume), None  # (B, G, D, H, W) group-wise reduced
         n = torch.ones_like(ref_expanded[:, :1])
         for sf, sp in zip(src_feats, src_projs):
             warped, valid = differentiable_homography_warp(sf, sp, ref_proj, depth_hypotheses, return_valid=True)
@@ -352,7 +454,15 @@ class GeoFusionNet(nn.Module):
             n = n + valid
             del warped
         volume = (vol_sq_sum - vol_sum ** 2 / n) / (n - 1).clamp(min=1)  # unbiased variance over valid views
-        return volume.mean(dim=1, keepdim=True), n
+        return self._group_mean(volume), n
+
+    def _group_mean(self, volume: torch.Tensor) -> torch.Tensor:
+        """(B, C, D, H, W) -> (B, G, D, H, W), mean within G equal channel groups."""
+        G = self.cfg.cost_groups
+        if G == 1:
+            return volume.mean(dim=1, keepdim=True)
+        B, C = volume.shape[:2]
+        return volume.view(B, G, C // G, *volume.shape[2:]).mean(dim=2)
 
     @staticmethod
     def _scale_projection(proj: torch.Tensor, scale: float) -> torch.Tensor:

@@ -118,7 +118,10 @@ def probe_view(model, sample, device, wrong_mm):
     ref_proj = bb._scale_projection(inp["ref_proj"], stage.resolution_scale)
     src_projs = [bb._scale_projection(p, stage.resolution_scale) for p in inp["src_projs"]]
 
-    raw_mean = bb.build_cost_volume(ref_f, src_fs, ref_proj, src_projs, hyp)[:, 0]  # (1, D, Hc, Wc)
+    # mean over cost channels: the single channel-mean variance channel, or for a
+    # group-wise volume (cost_groups > 1) the mean of the equal-size groups, which is
+    # the same channel-mean variance -- so the dip statistics stay comparable
+    raw_mean = bb.build_cost_volume(ref_f, src_fs, ref_proj, src_projs, hyp).mean(1)  # (1, D, Hc, Wc)
     pair = []
     for sf, sp in zip(src_fs, src_projs):
         w = torch.cat([differentiable_homography_warp(sf, sp, ref_proj, hyp[:, d:d + 8])
@@ -139,7 +142,8 @@ def probe_view(model, sample, device, wrong_mm):
     in_range = (gt_c > hyps[0] - step / 2) & (gt_c < hyps[-1] + step / 2)
     valid = (gt_c > 0) & in_range
 
-    res = {"n_valid": int(valid.sum())}
+    coarse_pred = regress_depth(out["scores"]["coarse"], hyp)[0, 0]
+    res = {"n_valid": int(valid.sum()), "coarse_pred_map": coarse_pred.cpu().numpy()}
     for name, mask in (("wrong", valid & (err_c > wrong_mm)), ("right", valid & (err_c < 1.0))):
         ys, xs = torch.nonzero(mask, as_tuple=True)
         if ys.numel() == 0:

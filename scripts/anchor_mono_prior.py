@@ -16,6 +16,11 @@ Writes, next to the relative prior:
     <root>/MonoPrior/<scan>_train/<view:04d>_metric.npy   float16 (256, 320) mm, 0 = invalid
     <root>/MonoPrior/<scan>_train/fits.json               per-view s, t, #points, #inliers, residual
 
+With `--anchors_only`, nothing above is rewritten: the fit is recomputed (it is
+deterministic), checked against fits.json, and the RANSAC-inlier anchors are saved as
+    <root>/MonoPrior/<scan>_train/<view:04d>_anchors.npz   xy (N, 2) SIFT-image px, z (N,) mm
+(views without a valid fit get N = 0). Used by scripts/prior_confidence.py.
+
 With `--layout test` (MVSNet dtu-test layout) SIFT runs at 800x600 against the raw
 1600x1200 Cameras/*.txt, and the prior is read from / written to <prior_root>/<scan>/.
 
@@ -120,6 +125,9 @@ def process_scan(scan: str) -> str:
 
     fits = {}
     out_dir = os.path.join(ARGS.prior_root, scan_dir)
+    if ARGS.anchors_only:
+        with open(os.path.join(out_dir, "fits.json")) as f:
+            old_fits = json.load(f)
     for ref in range(NUM_VIEWS):
         dmin = cams[ref]["depth_min"]
         dmax = dmin + NUM_DEPTH * cams[ref]["depth_interval"]
@@ -147,6 +155,15 @@ def process_scan(scan: str) -> str:
 
         g_rel = np.load(os.path.join(out_dir, f"{ref:04d}.npy")).astype(np.float32)
         fit = _ransac_affine_inv(_sample(g_rel, pts), zs, ARGS.tau_rel, seed=ref) if len(zs) >= MIN_INLIERS else None
+        if ARGS.anchors_only:
+            cached = old_fits[str(ref)]
+            if (fit is None) != (not cached["valid"]) or (
+                    fit is not None and not np.allclose([fit[0], fit[1]], [cached["s"], cached["t"]], rtol=1e-4)):
+                raise RuntimeError(f"{scan} view {ref}: recomputed fit differs from fits.json")
+            inl = fit[2] if fit is not None else np.zeros(len(zs), bool)
+            np.savez(os.path.join(out_dir, f"{ref:04d}_anchors.npz"),
+                     xy=pts[inl].astype(np.float32), z=zs[inl].astype(np.float32))
+            continue
         if fit is None:
             G = np.zeros_like(g_rel)
             fits[ref] = {"n_points": int(len(zs)), "n_inliers": 0, "valid": False}
@@ -159,6 +176,8 @@ def process_scan(scan: str) -> str:
             fits[ref] = {"s": s, "t": t, "n_points": int(len(zs)), "n_inliers": int(inl.sum()),
                          "median_abs_res_mm": float(np.median(res)), "valid_frac": float((G > 0).mean()), "valid": True}
         np.save(os.path.join(out_dir, f"{ref:04d}_metric.npy"), G.astype(np.float16))
+    if ARGS.anchors_only:
+        return f"{scan}: anchors saved, fits match fits.json"
     with open(os.path.join(out_dir, "fits.json"), "w") as f:
         json.dump(fits, f, indent=1)
     n_ok = sum(v["valid"] for v in fits.values())
@@ -176,6 +195,8 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--layout", choices=sorted(LAYOUTS), default="train")
     ap.add_argument("--prior_root", default=None, help="default: <root>/MonoPrior")
+    ap.add_argument("--anchors_only", action="store_true",
+                    help="only save the inlier anchors (see docstring); the prior is not rewritten")
     ARGS = ap.parse_args()
     ARGS.prior_root = ARGS.prior_root or os.path.join(ARGS.root, "MonoPrior")
     suffix = LAYOUTS[ARGS.layout]["suffix"]
