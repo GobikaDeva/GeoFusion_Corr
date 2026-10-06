@@ -109,8 +109,10 @@ def probe_view(model, sample, device, wrong_mm):
     bb = model.backbone
     stage = bb.cfg.stages[0]
     assert stage.name == "coarse"
-    ref_f = bb.rgb_encoder(inp["ref_img"])["coarse"]
-    src_fs = [bb.rgb_encoder(s)["coarse"] for s in inp["src_imgs"]]
+    # the features the model's own coarse cost volume uses (incl. the GGF residual)
+    ref_feats, src_feats = bb.extract_features(inp["ref_img"], inp["src_imgs"], inp["ref_geom"])
+    ref_f = ref_feats["coarse"]
+    src_fs = [sf["coarse"] for sf in src_feats]
     Hc, Wc = ref_f.shape[-2:]
     hyp = out["depth_hypotheses"]["coarse"]  # (1, D, Hc, Wc), same every pixel
     ref_proj = bb._scale_projection(inp["ref_proj"], stage.resolution_scale)

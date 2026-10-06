@@ -383,6 +383,20 @@ class GeoFusionNet(nn.Module):
         offsets = torch.arange(num_depth, device=center.device, dtype=center.dtype).view(1, -1, 1, 1)
         return start + offsets * step
 
+    def extract_features(self, ref_img: torch.Tensor, src_imgs: List[torch.Tensor], ref_geom: torch.Tensor):
+        """Per-stage features that enter the cost volume: ({stage: ref feature},
+        [{stage: src feature}] per source view). The reference features include the
+        GGF residual when enabled; source features are RGB-only. Anything that
+        rebuilds a cost volume outside forward() (e.g. scripts/costvol_profile_probe.py)
+        must use this, not rgb_encoder directly."""
+        ref_feats = self.rgb_encoder(ref_img)
+        src_feats_list = [self.rgb_encoder(s) for s in src_imgs]
+        if self.ggf_fusion is not None:
+            stage_name = self.ggf_stage_name
+            geom_feats = self.geometry_encoder(ref_geom)
+            ref_feats[stage_name] = self.ggf_fusion(ref_feats[stage_name], geom_feats[stage_name])
+        return ref_feats, src_feats_list
+
     def forward(
         self,
         ref_img: torch.Tensor,
@@ -409,13 +423,7 @@ class GeoFusionNet(nn.Module):
         `stages`: if given, stages are computed in order up to and including the
         deepest one listed (later stages depend on earlier ones). None = all stages.
         """
-        ref_feats = self.rgb_encoder(ref_img)
-        src_feats_list = [self.rgb_encoder(s) for s in src_imgs]
-        geom_feats = self.geometry_encoder(ref_geom)
-
-        if self.ggf_fusion is not None:
-            stage_name = self.ggf_stage_name
-            ref_feats[stage_name] = self.ggf_fusion(ref_feats[stage_name], geom_feats[stage_name])
+        ref_feats, src_feats_list = self.extract_features(ref_img, src_imgs, ref_geom)
 
         active_stages = self.cfg.stages
         if stages is not None:
