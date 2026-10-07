@@ -15,7 +15,8 @@ valid, evaluated on the coarse grid exactly as prior_confidence.view_signals (G 
 nearest each coarse cell centre) and broadcast nearest to the fine grid. The override
 uses the full-res G at each fine pixel; fine pixels with G = 0 keep the model depth.
 
-Runs on CPU, one process per scan; per-scan results go to <out_dir>/<scan>.json.
+Runs on CPU, one process per scan (or with --device cuda, scans in sequence on the GPU);
+per-scan results go to <out_dir>/<scan>.json.
 
 Usage:
     python scripts/gated_fusion_diag.py --config configs/ablations/A0f_fixes_only_short.yaml \
@@ -60,7 +61,7 @@ def process_scan(scan):
     thr = json.load(open(ARGS.gates))["gates"]["coarse_disagr_rev"]["threshold"]
     model = build_model(cfg["model"])
     model.load_state_dict(torch.load(ARGS.ckpt, map_location="cpu", weights_only=False)["model"])
-    model.eval()
+    model.to(ARGS.device).eval()
     eval_cfg = cfg.get("eval", {})
     test_data = {**cfg["data"], **eval_cfg.get("test_data", {})}
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -72,13 +73,13 @@ def process_scan(scan):
     depths, confs, gated, fired, projs = [], [], [], [], []
     for i in range(min(len(ds), ARGS.max_views or len(ds))):
         sample = ds[i]
-        inp = _collate_one(sample, "cpu")["model_inputs"]
+        inp = _collate_one(sample, ARGS.device)["model_inputs"]
         with torch.no_grad():
             out = model(**inp, alpha=1.0, max_gate=1.0)
             score = out["scores"]["fine"]
-            d = regress_depth(score, out["depth_hypotheses"]["fine"])[0, 0].numpy()
-            c = torch.softmax(score, dim=1).max(dim=1).values[0].numpy()
-            coarse = regress_depth(out["scores"]["coarse"], out["depth_hypotheses"]["coarse"])[0, 0].numpy()
+            d = regress_depth(score, out["depth_hypotheses"]["fine"])[0, 0].cpu().numpy()
+            c = torch.softmax(score, dim=1).max(dim=1).values[0].cpu().numpy()
+            coarse = regress_depth(out["scores"]["coarse"], out["depth_hypotheses"]["coarse"])[0, 0].cpu().numpy()
         G = sample["prior_depth"][0].numpy()
         H, W = G.shape
         Hc, Wc = coarse.shape
@@ -106,7 +107,7 @@ def process_scan(scan):
     for name, (dm, cm) in sets.items():
         pts = geometric_consistency_fusion(dm, cm, projs, prob_thresh=GEOMVSNET_PROB_THRESH,
                                            dist_thresh=GEOMVSNET_DIST_THRESH, num_consist=GEOMVSNET_NUM_CONSIST,
-                                           device="cpu")
+                                           device=ARGS.device)
         m = official_scan_metrics(pts, gt)
         res[name] = {k: float(m[k]) for k in ("accuracy", "completeness", "overall")}
         res[name]["n_points"] = int(len(pts))
@@ -125,10 +126,14 @@ def main():
     p.add_argument("--scans", nargs="+", required=True)
     p.add_argument("--threads", type=int, default=16)
     p.add_argument("--max_views", type=int, default=0, help="smoke test only")
+    p.add_argument("--device", default="cpu", help="cuda: scans run in sequence in this process")
     ARGS = p.parse_args()
     os.makedirs(ARGS.out_dir, exist_ok=True)
-    with Pool(len(ARGS.scans)) as pool:
-        results = pool.map(process_scan, ARGS.scans)
+    if ARGS.device == "cpu":
+        with Pool(len(ARGS.scans)) as pool:
+            results = pool.map(process_scan, ARGS.scans)
+    else:
+        results = [process_scan(s) for s in ARGS.scans]
     rows = {r["scan"]: r for r in results}
     summary = {v: {k: float(np.mean([r[v][k] for r in results])) for k in ("accuracy", "completeness", "overall")}
                for v in VARIANTS}
