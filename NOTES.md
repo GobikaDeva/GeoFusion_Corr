@@ -47,3 +47,34 @@ run on pixels with fine-stage error above 4 mm:
 This motivates Stage 2 (GeoCorr Lite). We can't pull a correct match out of the image
 evidence alone, so the correction has to use geometry: the mono+sparse prior G, and
 normal-aware warping or correction of the cost volume.
+
+## Geometry prior experiments (2026-10-06 .. 10-07)
+
+All seed 2, 1500-step continuations of A0f unless noted.
+
+- **B1 (G as input via zero-init GGF) and L_geo off:** both are within run-to-run
+  noise of the matched control (`A0f_continued_short`). Val fine median: 1.552 / 1.565 vs
+  1.540 mm. scan48 competing-dips share: 18.53 / 18.57 vs 18.42% of valid pixels.
+- **Prior quality (22 test scans):** median |G - GT| is 5-69 mm per scan. On ambiguous
+  pixels G is nearer the true dip only 52.4% of the time and within 4 mm only 11.5%.
+- **Test 1, confidence gates** (`scripts/prior_gate_valfrozen.py`,
+  `runs/prior_confidence_val/gates_valfrozen.json`): thresholds fit on dtu_val, applied
+  unchanged to test.
+  - Only reversed coarse disagreement passes the 20%/80% rule:
+    |G - coarse| >= 99.3 mm, val 20.4%/90.7%, test 21.2%/86.7%.
+  - Harm with depth := G, test, all valid coarse pixels:
+    - fires on 5.29% of pixels, 14.9% of which the model already had right
+    - mean error -2.52 mm (from 18.28 mm)
+    - share of pixels within 4 mm -0.46 pt
+  - So the gate fixes gross outliers but makes almost no pixel accurate.
+- **Gate through official fusion** (`scripts/gated_fusion_diag.py`,
+  `runs/prior_confidence_val/fusion_diag/`): a diagnostic, not a paper number. A0f seed2,
+  1600x1152, GeoMVSNet fusion, outlier scans 11/13/48/62/77, run on CPU. The
+  CPU model-only numbers are within 0.025 mm of the GPU evaluation per scan.
+  Mean overall: model 0.828, gated (confidence kept) 0.777, gated (confidence := 1) 0.773.
+  - Gains come from completeness: scan48 1.93 -> 1.70, scan77 0.80 -> 0.73.
+  - scan62 gets slightly worse (0.712 -> 0.724).
+  - Not yet measured on the other 17 scans, where firing could cost accuracy.
+- **Test 2, B2_capacity** (2.03M params vs 121k; FPN encoder, 8-group cost, 3D U-Net):
+  running as of 2026-10-07. Results go to `runs/B2_capacity/seed2/` (diag + probe_final).
+  No full DTU evaluation is scheduled.
