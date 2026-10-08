@@ -1,0 +1,40 @@
+# B2_nogeo (2026-10-08): B2_capacity.yaml with the prior loss weight set to 0
+# (loss.geo_weight 0.0). Every other setting is identical; only stage_name, init_from and
+# geo_weight differ. Chain: B2_nogeo_base -> B2_nogeo_finetune -> B2_nogeo.
+# B2_capacity (2026-10-06, Test 2): more capacity at the same recipe as A0f. Phase 3/3 =
+# A0f_fixes_only_short's recipe (1500 steps) from B2_capacity_finetune. Compare with A0f
+# (runs/A0f_fixes_only_short/seed2). Changes vs A0f, model only:
+#   encoder fpn: wider, deeper bottom-up (32/96/192 ch, 2/3/3 convs; was 32/64/128, 1/1/1)
+#     + top-down FPN (inner 64), same output channels
+#   cost_groups 8: group-wise variance, 8 cost channels instead of the channel mean
+#   reg_levels 2, reg_base_channels 16: 3D U-Net with 2 down/up levels (was 1, base 8)
+stage_name: B2_nogeo
+output_root: runs
+model:
+  backbone: {in_channels: 3, geometry_channels: 4, base_channels: 32, use_ggf_residual: false,
+             mask_out_of_view: true, reg_upsample: trilinear,
+             encoder: fpn, fpn_widths: [32, 96, 192], fpn_inner: 64, cost_groups: 8, reg_base_channels: 16, reg_levels: 2}
+  geocorr: {enabled: false}
+data: {root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU, gt_root: /home/gobika/Research_Gobika/dtu_groundtruth, n_views: 5, img_wh: [640, 512], num_depth: 192, depth_interval: 2.65, num_workers: 6, geometry_prior: mono_sparse,
+       lighting_conditions: [0, 1, 2, 3, 4, 5, 6]}
+training:
+  init_from: runs/B2_nogeo_finetune/seed{seed}/ckpt_final.pt
+  batch_size: 2
+  grad_accum_steps: 2
+  lr: 0.0005
+  warmup_steps: 100
+  max_steps: 1500
+  max_epochs: 1000
+  log_every: 50
+  ckpt_every: 500
+  val_every: 500
+  val_view_stride: 1
+loss:
+  type: compact_self_supervised
+  use_geo_term: true
+  geo_weight: 0.0
+  consistency:
+    enabled: false
+# Published DTU numbers (and GeoMVSNet's test.py) use the full-res dtu-test images:
+# 1600x1200 resized to the multiple-of-64 fit 1600x1152. Training stays at 640x512.
+eval: {test_data: {root: /home/gobika/Research_Gobika/GeoFusionNet/datasets/dtu-test-1200, layout: test, img_wh: [1600, 1152], prior_root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU_test/MonoPrior}}

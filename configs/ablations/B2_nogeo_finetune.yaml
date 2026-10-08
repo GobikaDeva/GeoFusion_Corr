@@ -1,0 +1,32 @@
+# B2_nogeo phase finetune (2026-10-08): B2_capacity_finetune.yaml with the prior loss weight set to 0
+# (loss.geo_weight 0.0). Every other setting is identical; only stage_name, init_from and
+# geo_weight differ. Chain: B2_nogeo_base -> B2_nogeo_finetune -> B2_nogeo.
+# B2_capacity phase 2/3: A0_finetune_clmvs's recipe (CL-MVSNet LR schedule, 6k steps) on the
+# larger model, from B2_capacity_base. Only model.backbone, stage_name and init_from differ.
+stage_name: B2_nogeo_finetune
+output_root: runs
+model:
+  backbone: {in_channels: 3, geometry_channels: 4, base_channels: 32, use_ggf_residual: false,
+             mask_out_of_view: true, reg_upsample: trilinear,
+             encoder: fpn, fpn_widths: [32, 96, 192], fpn_inner: 64, cost_groups: 8, reg_base_channels: 16, reg_levels: 2}
+  geocorr: {enabled: false}
+data: {root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU, gt_root: /home/gobika/Research_Gobika/dtu_groundtruth, n_views: 5, img_wh: [640, 512], num_depth: 192, depth_interval: 2.65, num_workers: 4, geometry_prior: mono_sparse,
+       lighting_conditions: [0, 1, 2, 3, 4, 5, 6]}
+training:
+  init_from: runs/B2_nogeo_base/seed{seed}/ckpt_final.pt
+  batch_size: 2
+  grad_accum_steps: 2
+  lr: 0.0005
+  warmup_steps: 200
+  lr_milestones: [0.6, 0.75, 0.9]   # steps 3600 / 4500 / 5400
+  lr_gamma: 0.5
+  max_steps: 6000                   # optimizer steps (24k samples)
+  max_epochs: 1000
+  log_every: 50
+  ckpt_every: 1000
+  val_every: 500                    # DTU val split (18 scans x 49 views, lighting 3)
+  val_view_stride: 1
+loss: {type: compact_self_supervised, use_geo_term: true, geo_weight: 0.0}
+# Published DTU numbers (and GeoMVSNet's test.py) use the full-res dtu-test images:
+# 1600x1200 resized to the multiple-of-64 fit 1600x1152. Training stays at 640x512.
+eval: {test_data: {root: /home/gobika/Research_Gobika/GeoFusionNet/datasets/dtu-test-1200, layout: test, img_wh: [1600, 1152], prior_root: /home/gobika/Research_Gobika/geofusionnet_geocorr/data/DTU_test/MonoPrior}}
