@@ -48,7 +48,7 @@ This motivates Stage 2 (GeoCorr Lite). We can't pull a correct match out of the 
 evidence alone, so the correction has to use geometry: the mono+sparse prior G, and
 normal-aware warping or correction of the cost volume.
 
-## Geometry prior experiments (2026-10-06 .. 10-07)
+## Geometry prior experiments (2026-10-06 .. 10-08)
 
 All seed 2, 1500-step continuations of A0f unless noted.
 
@@ -74,7 +74,26 @@ All seed 2, 1500-step continuations of A0f unless noted.
   Mean overall: model 0.828, gated (confidence kept) 0.777, gated (confidence := 1) 0.773.
   - Gains come from completeness: scan48 1.93 -> 1.70, scan77 0.80 -> 0.73.
   - scan62 gets slightly worse (0.712 -> 0.724).
-  - Not yet measured on the other 17 scans, where firing could cost accuracy.
-- **Test 2, B2_capacity** (2.03M params vs 121k; FPN encoder, 8-group cost, 3D U-Net):
-  running as of 2026-10-07. Results go to `runs/B2_capacity/seed2/` (diag + probe_final).
-  No full DTU evaluation is scheduled.
+  - All 22 scans on GPU (`runs/prior_confidence_val/fusion_diag_22_cuda/`; ungated
+    matches the official per-scan numbers exactly): overall 0.479 -> 0.470 (keepconf),
+    better on 11/22. Nearly all of it is scan48 (-0.116) and scan77 (-0.114); the other
+    20 scans net +0.024 (slightly worse).
+- **Test 2, B2_capacity** (2.03M params vs 121k; FPN encoder, 8-group cost, 3D U-Net),
+  full A0f chain, seed 2, single-seed full DTU eval (`runs/B2_capacity/seed2/eval_1600x1152.json`):
+  - Fused: acc 0.474 / comp 0.362 / overall 0.418 vs A0f 0.435 / 0.523 / 0.479. Better on
+    17/22 scans; scan48 1.213 -> 0.708.
+  - Depth maps are not better: val fine median 1.76 vs 1.52 mm; scan48 fine median
+    3.96 vs 3.45 mm, >4 mm 49.8 vs 47.5%, GT coverage 66.7 vs 62.6%. Competing dips drop
+    (12.90 vs 18.75% of valid) but no-min-at-GT rises (12.64 vs 11.17%).
+- **Fusion pass-through** (`scripts/fusion_pass_diag.py`, `runs/fusion_pass_diag/`): the
+  conf > 0.3 filter passes ~96% (A0f) / ~100% (B2) of pixels, so the geometric check is
+  the real gate. Without it A0f gets 0.474 and B2 0.418. With B2's conf threshold matched
+  to A0f's pass rate, B2 keeps fewer points (19.9M vs 22.0M per scan) and still scores
+  0.416. So B2's completeness gain comes from where its points land, not how many pass.
+  Why its depths fuse better is not verified.
+- **Gate on B2** (refit on B2's val pixels, `runs/prior_confidence_val_B2/`): reversed
+  disagreement >= 89.3 mm passes (val 20.0%/86.3%, test 23.6%/82.2%). Through fusion on
+  22 scans: 0.418 -> 0.415, better on 14/22, almost all from scan77 (-0.070); scan48
+  -0.002, scan32 +0.018. B2 already fixes most of what the gate fixed on A0f.
+- **Takeaway:** capacity (-0.061 overall) is a much bigger lever than the gated prior
+  (-0.009 on A0f, -0.003 on B2). B2 is one seed; multi-seed B2 is not measured.
