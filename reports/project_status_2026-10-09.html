@@ -1,0 +1,124 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GeoFusionNet Project Status</title>
+<style>
+@page { size: A4; margin: 16mm 15mm; }
+body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9.6pt; color:#1d1d1f; line-height:1.42; background:#fff; }
+h1 { font-size: 17pt; margin:0 0 2px; }
+.sub { color:#666; margin-bottom:12px; }
+h2 { font-size: 12pt; border-bottom:1.5px solid #2b5797; padding-bottom:2px; margin:16px 0 6px; color:#2b5797; break-after: avoid; }
+h3 { font-size:10pt; margin:10px 0 4px; break-after: avoid; }
+table { border-collapse: collapse; width:100%; margin:4px 0 8px; font-size:8.8pt; break-inside: avoid; }
+th, td { border-bottom:1px solid #ddd; padding:3px 6px; text-align:left; vertical-align:top; }
+th { background:#f1f4f9; }
+td.n, th.n { text-align:right; font-variant-numeric: tabular-nums; }
+.box { background:#f6f8fb; border-left:3px solid #2b5797; padding:6px 10px; margin:6px 0; break-inside: avoid; }
+.warn { border-left-color:#c77c02; background:#fdf8ef; }
+ul { margin:3px 0 6px 18px; padding:0; } li { margin:1px 0; }
+.small { font-size:8.3pt; color:#555; }
+b.good { color:#1e7b34; } b.bad { color:#b3261e; }
+</style></head><body>
+
+<h1>GeoFusionNet / GeoCorr: Project Status Report</h1>
+<div class="sub">Status as of 2026-10-09, 19:20 UTC · main @ e92a340 · Prepared for Gobika S</div>
+
+<div class="box">
+<b>Summary.</b> The frozen Stage 0 baseline (A0f) scores <b>0.491 ± 0.009</b> overall on full-res DTU (3 seeds × 22 scans). The geometric prior does not help in any of the ways tested: as an input (B1), as a loss (L_geo), or as a confidence-gated replacement. In every case the effect is within noise or limited to a few outlier scans. Only one change has clearly helped so far: more cost-volume capacity (B2). It reaches <b>0.414 / 0.418</b> on two seeds, against A0f's 0.479 on seed 2. The gain comes from completeness, and per-view depth metrics did not improve. The third B2 seed, the B2 no-L_geo ablation and a frozen mono-feature variant are running or queued now.
+</div>
+
+<h2>1. Ongoing work</h2>
+<table>
+<tr><th>Queue / job</th><th>State</th><th>ETA</th></tr>
+<tr><td><b>B2 seeds + no-geo</b> (PID 3390614)<br><span class="small">scripts/queue_b2_seeds_nogeo.sh · log runs/queue_b2_seeds_nogeo.log</span></td>
+<td>B2_capacity seed0: <b>done</b> (overall 0.414)<br>B2_nogeo seed2: <b>running</b>, base phase step 18,900 of 20,000; then 6k fine-tune, 1.5k final phase, diagnostics, probe, 1600×1152 eval<br>B2_capacity seed1: queued (full chain)</td>
+<td>Queue done ~2026-10-11 07:30 UTC</td></tr>
+<tr><td><b>B2_mono_feat</b> (PID 3457546)<br><span class="small">scripts/queue_b2_mono_feat.sh · patch fc8c805</span></td>
+<td>Waiting for QUEUE_DONE above. Then seed 2: identity test, train from B2_nogeo_finetune seed2, diagnostics, probe, eval. Matched control: B2_nogeo seed2.</td>
+<td>Starts ~2026-10-11 07:30 UTC</td></tr>
+<tr><td>B2 3-seed aggregate</td><td>scripts/aggregate_b2_3seed.sh (c54dfc2). Runs only after QUEUE_DONE and writes runs/B2_capacity/aggregated_1600x1152.json.</td><td>After queue</td></tr>
+</table>
+<p class="small">Every queue step started after commit e92a340 (2026-10-09 ~17:10 UTC) logs a <code>[provenance] git commit …</code> line.</p>
+
+<h2>2. Headline numbers (DTU test, 22 scans, 1600×1152, official protocol; mm, lower is better)</h2>
+<svg width="680" height="232" viewBox="0 0 680 232" font-family="DejaVu Sans, Arial" font-size="10">
+  <g fill="#1d1d1f">
+  <text x="0" y="22">A0 (pre-fix baseline)</text>
+  <text x="0" y="48">A0f Stage 0, 3-seed mean</text>
+  <text x="0" y="74">A0f seed 2</text>
+  <text x="0" y="100">A0f seed 2 + disagr. gate</text>
+  <text x="0" y="126">CL-MVSNet plys (our eval)</text>
+  <text x="0" y="152">B2 seed 2</text>
+  <text x="0" y="178">B2 seed 2 + gate</text>
+  <text x="0" y="204">B2 seed 0</text>
+  </g>
+  <!-- scale: 0..0.55 -> 0..400px, x0=175 -->
+  <g>
+  <rect x="175" y="12" width="376" height="14" fill="#9aa7b8"/><text x="556" y="23">0.517</text>
+  <rect x="175" y="38" width="357" height="14" fill="#2b5797"/><text x="537" y="49">0.491 ± 0.009</text>
+  <rect x="175" y="64" width="348" height="14" fill="#9aa7b8"/><text x="528" y="75">0.479</text>
+  <rect x="175" y="90" width="342" height="14" fill="#9aa7b8"/><text x="522" y="101">0.470</text>
+  <rect x="175" y="116" width="319" height="14" fill="#c9c9c9"/><text x="499" y="127">0.438</text>
+  <rect x="175" y="142" width="304" height="14" fill="#1e7b34"/><text x="484" y="153">0.418</text>
+  <rect x="175" y="168" width="302" height="14" fill="#9aa7b8"/><text x="482" y="179">0.415</text>
+  <rect x="175" y="194" width="301" height="14" fill="#1e7b34"/><text x="481" y="205">0.414</text>
+  </g>
+  <line x1="175" y1="6" x2="175" y2="214" stroke="#888"/>
+  <text x="175" y="228" fill="#666">Overall (mean of Acc and Comp, mm). Bars start at 0.</text>
+</svg>
+
+<table>
+<tr><th>Model</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th><th>Notes</th></tr>
+<tr><td>A0 (pre-fix)</td><td class="n">0.447</td><td class="n">0.586</td><td class="n">0.517</td><td>Superseded</td></tr>
+<tr><td><b>A0f Stage 0</b> (3 seeds)</td><td class="n">0.437 ± 0.003</td><td class="n">0.545 ± 0.016</td><td class="n"><b>0.491 ± 0.009</b></td><td>Frozen baseline (std over seeds, ddof=0)</td></tr>
+<tr><td>A0f seed 2</td><td class="n">0.435</td><td class="n">0.523</td><td class="n">0.479</td><td>Reference for single-seed tests</td></tr>
+<tr><td>CL-MVSNet released plys</td><td class="n"></td><td class="n"></td><td class="n">0.438</td><td>Scored with our evaluator (paper reports 0.329 under its own fusion)</td></tr>
+<tr><td>B2_capacity seed 2</td><td class="n">0.473</td><td class="n">0.362</td><td class="n">0.418</td><td>Better than A0f s2 on 17/22 scans</td></tr>
+<tr><td>B2_capacity seed 0</td><td class="n">0.470</td><td class="n">0.358</td><td class="n">0.414</td><td>New, 2026-10-09</td></tr>
+<tr><td>B2_capacity seed 1</td><td colspan="4">Not measured yet (queued)</td></tr>
+</table>
+
+<h2>3. How we got here</h2>
+<h3>3.1 Fixing the pipeline (2026-09-23 to 09-25)</h3>
+<ul>
+<li><b>Constant-depth failure:</b> early A0 runs had ~67 mm error. The cause was edge-aware smoothness applied to raw mm depth. Normalizing by per-image mean depth fixed it. A wrong score sign was ruled out.</li>
+<li><b>Evaluation:</b> evaluation before 2026-09-23 had no fusion filtering and used a non-official metric. It now uses GeoMVSNet's open3d fusion (prob 0.3, 0.2 mm, 4 views) and the official DTUeval protocol, cross-checked against the reference. Full resolution is 1600×1152. <b>Numbers from before the fix are not comparable.</b></li>
+<li><b>Undertraining:</b> A0 saw ~40k samples, about 9% of the reference recipe. A CL-MVSNet-style LR fine-tune helped only ~5% (val fine median 1.75 → 1.65–1.70 mm), so the LR schedule does not explain the plateau.</li>
+<li><b>Cost-volume fixes:</b> out-of-view masking plus trilinear regularizer upsampling cut sawtooth from 41% to 0.1%. They are now the default.</li>
+</ul>
+
+<h3>3.2 Failure analysis: scan48 and the outlier scans (11, 13, 48, 62, 77)</h3>
+<ul>
+<li>The main failure is <b>photometric ambiguity</b>. On wrong pixels, GT is the global cost minimum on only 30%, a secondary minimum on 41%, and no minimum on 28%. Our photometric loss itself prefers the wrong depth.</li>
+<li>Robust losses (L0.5, min-view) and best-k view aggregation did not fix it. Widening the depth windows at test time made it worse.</li>
+<li>The CL-MVSNet consistency loss (ICC + SCC, ported with ×0.0163 weight calibration) was within noise on aggregate val. On scan48 it was worse at the final checkpoint (4.34 vs 3.45 mm). <b>Dropped</b>; A0f (fixes only) was frozen as Stage 0.</li>
+</ul>
+
+<h3>3.3 Geometric prior G (Depth-Anything-V2-S anchored to SIFT points)</h3>
+<table>
+<tr><th>Test</th><th>Result (seed 2, matched control)</th><th>Verdict</th></tr>
+<tr><td><b>B1</b>: G as input (zero-init GGF)</td><td>Val fine +0.012 mm, coverage −1.2 pt; scan48 −0.44 mm, but the control's own swing between checkpoints is 0.39 mm; competing dips unchanged (18.53 vs 18.42%)</td><td>No gain</td></tr>
+<tr><td><b>No-L_geo</b> vs control</td><td>Val fine +0.025 mm; scan48 −0.20 mm; dips +0.15 pt</td><td>Noise, so L_geo has no measurable effect</td></tr>
+<tr><td>Prior quality (22 scans)</td><td>Median |G−GT| 5–69 mm vs model 0.8–4 mm. On ambiguous pixels G is nearer the true dip on only 52.4%, and within 4 mm on only 11.5%. 16/49 scan48 views have no prior.</td><td>About a coin flip as a dip selector</td></tr>
+<tr><td>Confidence gates (thresholds frozen on val)</td><td>Only "prior disagrees with coarse depth by ≥ 99.3 mm" passes the pre-registered rule (test: 21.2% coverage, 86.7% correct). Partly mechanical.</td><td>Fixes gross outliers only</td></tr>
+<tr><td>Gated fusion, A0f s2 (22 scans)</td><td>0.479 → 0.470. Almost all of the gain is from scan48 (−0.116) and scan77 (−0.114); the other 20 scans are slightly worse.</td><td>Small, concentrated</td></tr>
+<tr><td>Gated fusion, B2 s2 (refit, 89.3 mm)</td><td>0.418 → 0.415. scan48 0.708 → 0.706.</td><td>Near no-op on B2</td></tr>
+</table>
+
+<h3>3.4 Capacity: B2_capacity</h3>
+<ul>
+<li>Changes: FPN 32/96/192, 8-group correlation cost, 3D UNet regularizer. 2.03M params vs A0f's 121k. Same 20k + 6k + 1.5k training chain as A0f.</li>
+<li>Fused point clouds are much better (comp 0.36 vs 0.52; scan48 1.213 → 0.708). <b class="bad">Per-view depth metrics are worse</b>, though: val fine median 1.76 vs 1.52 mm, and scan48 fine median 3.96 vs 3.45 mm. Competing dips on scan48 fell from 18.75 to 12.90%.</li>
+<li>Fusion pass-through check: the confidence filter is close to a no-op, and the point counts are about the same as A0f's (22.3M vs 22.1M). At a pass rate matched to A0f, B2 still scores 0.416. So the gain comes from <i>where</i> the points land, not how many survive fusion. The exact mechanism has not been verified.</li>
+</ul>
+
+<h2>4. Open questions and next decisions</h2>
+<div class="box warn">
+<ul>
+<li><b>Is B2's gain robust?</b> Two of three seeds agree (0.414, 0.418), and the seed 1 result is due ~10-11. The decision on the 3-seed mean ± std comes from aggregate_b2_3seed.sh.</li>
+<li><b>Does L_geo matter on B2?</b> Answered by the B2_nogeo seed 2 vs B2 seed 2 matched pair.</li>
+<li><b>Can monocular information help without the noisy metric prior?</b> Answered by B2_mono_feat (frozen DA-V2-S features as a zero-init residual) vs B2_nogeo seed 2.</li>
+<li><b>GeoCorr Lite decision (still open):</b> the evidence so far does not support the prior as the paper's main contribution. Capacity and monocular features are the remaining candidates.</li>
+<li>Why B2 fuses better despite worse per-view depth is not yet explained.</li>
+</ul>
+</div>
+<p class="small">Sources: runs/*/eval_1600x1152.json, runs/A0f_fixes_only_short/aggregated_1600x1152.json, matched-pair diagnostics and probes under runs/, NOTES.md and the experiment-history doc. All numbers are measured; items not yet run are marked "not measured".</p>
+</body></html>
