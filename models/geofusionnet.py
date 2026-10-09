@@ -72,6 +72,14 @@ class GeoFusionNetConfig:
     # 2 = CostRegularizerUNet3D with two down/up levels (trilinear upsampling only).
     reg_base_channels: int = 8
     reg_levels: int = 1
+    # Frozen monocular features (B2_mono_feat): Depth-Anything-V2-Small's fused DPT
+    # feature of the REFERENCE image, projected by a zero-initialized 1x1 conv and added
+    # to the reference encoder features at mono_feat_stages. Source features unchanged.
+    mono_features: bool = False
+    mono_model_id: str = "depth-anything/Depth-Anything-V2-Small-hf"
+    mono_feat_stages: List[str] = field(default_factory=lambda: ["coarse", "mid"])
+    mono_input_h: int = 518   # Depth-Anything input height (multiple of its 14px patch)
+    mono_fp16: bool = True    # run the frozen network under fp16 autocast on CUDA
 
 
 class RGBEncoder(nn.Module):
@@ -188,6 +196,66 @@ class GGFResidualFusion(nn.Module):
     def forward(self, rgb_feat: torch.Tensor, geom_feat: torch.Tensor) -> torch.Tensor:
         residual = self.proj(torch.cat([rgb_feat, geom_feat], dim=1))
         return rgb_feat + residual
+
+
+class MonoFeatureInjection(nn.Module):
+    """Frozen Depth-Anything-V2 features of the reference image as a zero-initialized
+    residual on the reference encoder features.
+
+    The frozen network runs under no_grad (fp16 autocast on CUDA) and is held outside
+    the module tree, so it is not in parameters() (optimizer) or state_dict()
+    (checkpoints stay B2-compatible); _apply moves/casts it with the module. Its last
+    fused DPT neck map (64 ch, 8/14 of its input resolution) is resized to each stage
+    and projected by a 1x1 conv whose weight and bias start at zero, so at
+    initialization the reference features are unchanged.
+    """
+
+    MEAN = (0.485, 0.456, 0.406)
+    STD = (0.229, 0.224, 0.225)
+
+    def __init__(self, model_id: str, stage_channels: dict, input_h: int, fp16: bool):
+        super().__init__()
+        from transformers import AutoModelForDepthEstimation
+
+        da = AutoModelForDepthEstimation.from_pretrained(model_id).eval()
+        da.requires_grad_(False)
+        self._frozen = [da]  # a list keeps it out of the module tree
+        self.patch = da.config.patch_size
+        self.input_h = input_h
+        self.fp16 = fp16
+        c_in = da.config.fusion_hidden_size
+        self.proj = nn.ModuleDict({name: nn.Conv2d(c_in, c, 1) for name, c in stage_channels.items()})
+        for conv in self.proj.values():
+            nn.init.zeros_(conv.weight)
+            nn.init.zeros_(conv.bias)
+        self.register_buffer("mean", torch.tensor(self.MEAN).view(1, 3, 1, 1), persistent=False)
+        self.register_buffer("std", torch.tensor(self.STD).view(1, 3, 1, 1), persistent=False)
+
+    def _apply(self, fn, recurse=True):
+        self._frozen[0]._apply(fn)
+        return super()._apply(fn, recurse)
+
+    @torch.no_grad()
+    def mono_feature(self, ref_img: torch.Tensor) -> torch.Tensor:
+        """(B, 3, H, W) image in [-1, 1] (data/datasets/dtu.py) -> (B, C, h', w') fp32."""
+        da = self._frozen[0]
+        H, W = ref_img.shape[-2:]
+        h = self.input_h
+        w = max(1, round(W * h / H / self.patch)) * self.patch
+        x = F.interpolate(ref_img * 0.5 + 0.5, size=(h, w), mode="bicubic", align_corners=False)
+        x = (x - self.mean) / self.std
+        with torch.autocast(x.device.type, dtype=torch.float16, enabled=self.fp16 and x.is_cuda):
+            hidden = da.backbone.forward_with_filtered_kwargs(x).feature_maps
+            fused = da.neck(hidden, h // self.patch, w // self.patch)[-1]
+        return fused.float()
+
+    def forward(self, ref_img: torch.Tensor, sizes: dict) -> dict:
+        """{stage: (h, w)} -> {stage: (B, C_stage, h, w) residual}."""
+        feat = self.mono_feature(ref_img)
+        return {
+            name: self.proj[name](F.interpolate(feat, size=tuple(size), mode="bilinear", align_corners=False, antialias=True))
+            for name, size in sizes.items()
+        }
 
 
 def _blur121_3d(x: torch.Tensor) -> torch.Tensor:
@@ -377,14 +445,20 @@ class GeoFusionNet(nn.Module):
         if any((cfg.base_channels * k) % cfg.cost_groups for k in (1, 2, 4)):
             raise ValueError(f"cost_groups {cfg.cost_groups} must divide every stage's feature channels")
         self.geometry_encoder = GeometryEncoder(cfg.geometry_channels, cfg.base_channels)
+        stage_channels = {
+            "fine": cfg.base_channels,
+            "mid": cfg.base_channels * 2,
+            "coarse": cfg.base_channels * 4,
+        }
+
+        self.mono_injection = None
+        if cfg.mono_features:
+            self.mono_injection = MonoFeatureInjection(
+                cfg.mono_model_id, {s: stage_channels[s] for s in cfg.mono_feat_stages}, cfg.mono_input_h, cfg.mono_fp16
+            )
 
         self.ggf_fusion = None
         if cfg.use_ggf_residual:
-            stage_channels = {
-                "fine": cfg.base_channels,
-                "mid": cfg.base_channels * 2,
-                "coarse": cfg.base_channels * 4,
-            }
             stage_name = cfg.stages[cfg.ggf_stage_index].name
             self.ggf_fusion = GGFResidualFusion(stage_channels[stage_name])
             self.ggf_stage_name = stage_name
@@ -496,11 +570,15 @@ class GeoFusionNet(nn.Module):
     def extract_features(self, ref_img: torch.Tensor, src_imgs: List[torch.Tensor], ref_geom: torch.Tensor):
         """Per-stage features that enter the cost volume: ({stage: ref feature},
         [{stage: src feature}] per source view). The reference features include the
-        GGF residual when enabled; source features are RGB-only. Anything that
-        rebuilds a cost volume outside forward() (e.g. scripts/costvol_profile_probe.py)
-        must use this, not rgb_encoder directly."""
+        mono-feature and GGF residuals when enabled; source features are RGB-only.
+        Anything that rebuilds a cost volume outside forward() (e.g.
+        scripts/costvol_profile_probe.py) must use this, not rgb_encoder directly."""
         ref_feats = self.rgb_encoder(ref_img)
         src_feats_list = [self.rgb_encoder(s) for s in src_imgs]
+        if self.mono_injection is not None:
+            sizes = {name: ref_feats[name].shape[-2:] for name in self.cfg.mono_feat_stages}
+            for name, residual in self.mono_injection(ref_img, sizes).items():
+                ref_feats[name] = ref_feats[name] + residual
         if self.ggf_fusion is not None:
             stage_name = self.ggf_stage_name
             geom_feats = self.geometry_encoder(ref_geom)
