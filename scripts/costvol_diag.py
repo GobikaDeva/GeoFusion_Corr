@@ -26,9 +26,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data.datasets.dtu import DTUDataset  # noqa: E402
 from evaluation.stage_depth import sample_stage_stats, summarize  # noqa: E402
 from models import build_model  # noqa: E402
+from training.provenance import log_git_commit  # noqa: E402
 
 
 def main():
+    log_git_commit()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--ckpt", required=True)

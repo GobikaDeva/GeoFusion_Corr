@@ -38,6 +38,7 @@ from models import build_model, regress_depth  # noqa: E402
 from models.geofusionnet import differentiable_homography_warp  # noqa: E402
 from models.losses import _ssim  # noqa: E402
 from models.warp_utils import warp_image_by_depth  # noqa: E402
+from training.provenance import log_git_commit  # noqa: E402
 
 
 def local_min(cost, idx):
@@ -219,6 +220,7 @@ def summarize(results):
 
 
 def main():
+    log_git_commit()
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--ckpt", required=True)

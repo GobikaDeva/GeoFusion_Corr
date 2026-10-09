@@ -30,6 +30,7 @@ from evaluation.fusion import (
 )
 from evaluation.metrics import chamfer_distances, dtu_official_metrics, f_score, overall_distance
 from models import build_model, regress_depth
+from training.provenance import log_git_commit
 
 MAX_EVAL_DIST = 20.0  # mm; standard DTU-scale outlier clip before averaging accuracy/completeness
 FUSION_STAGE = "fine"  # full-resolution cascade stage; matches training/train.py's eval_stage default
@@ -204,6 +205,7 @@ def check_gates(result: dict, baseline_stats: dict | None) -> dict:
 
 
 def main():
+    log_git_commit()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--ckpt", required=True)

@@ -27,6 +27,7 @@ from models import (
 )
 from training.schedule import AlphaSchedule, GateCeilingSchedule, PriorDropoutSchedule
 from evaluation.stage_depth import sample_stage_stats, summarize
+from training.provenance import log_git_commit
 from training.seed_utils import set_seed
 from training.trainer import Trainer, TrainerConfig
 
@@ -230,6 +231,7 @@ def validate(model, dataset, device: str, view_stride: int) -> dict:
 
 
 def main():
+    log_git_commit()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--seed", type=int, nargs="+", default=[0])
