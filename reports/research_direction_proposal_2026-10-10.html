@@ -1,0 +1,383 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Research Direction Proposal</title>
+<style>
+@page { size: A4; margin: 16mm 15mm 16mm 15mm; }
+:root { --ink:#1d1d1f; --muted:#5b5b60; --accent:#2b5797; --good:#1e7b34; --bad:#b3261e; --warn:#c77c02; --rule:#dcdfe5; --tint:#f4f6fa; }
+body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9.6pt; color:var(--ink); line-height:1.45; background:#fff; margin:0; }
+h1 { font-size: 19pt; margin:0 0 4px; line-height:1.2; }
+.sub { color:var(--muted); margin-bottom:14px; }
+h2 { font-size: 12.5pt; border-bottom:1.5px solid var(--accent); padding-bottom:2px; margin:20px 0 7px; color:var(--accent); break-after: avoid; }
+h3 { font-size:10.2pt; margin:12px 0 4px; break-after: avoid; }
+p { margin:4px 0 7px; }
+table { border-collapse: collapse; width:100%; margin:5px 0 10px; font-size:8.7pt; }
+tr { break-inside: avoid; }
+th, td { border-bottom:1px solid var(--rule); padding:3px 6px; text-align:left; vertical-align:top; }
+th { background:#eef2f8; }
+td.n, th.n { text-align:right; font-variant-numeric: tabular-nums; white-space:nowrap; }
+.box { background:var(--tint); border-left:3px solid var(--accent); padding:7px 11px; margin:7px 0; break-inside: avoid; }
+.warn { border-left-color:var(--warn); background:#fdf8ef; }
+.okbox { border-left-color:var(--good); background:#f1f8f3; }
+ul, ol { margin:3px 0 7px 18px; padding:0; } li { margin:2px 0; }
+.small { font-size:8.2pt; color:var(--muted); }
+b.good { color:var(--good); } b.bad { color:var(--bad); }
+.pb { break-before: page; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size:8.2pt; background:#f1f1f3; padding:0 2px; }
+.tag { display:inline-block; font-size:7.6pt; padding:0 5px; border-radius:3px; border:1px solid #bbb; color:#444; margin-left:3px; }
+.tag.m { border-color:var(--good); color:var(--good); }
+.tag.p { border-color:var(--warn); color:var(--warn); }
+.tag.n { border-color:var(--bad); color:var(--bad); }
+figure { margin:6px 0 10px; break-inside: avoid; }
+figcaption { font-size:8.2pt; color:var(--muted); margin-top:2px; }
+.toc { columns: 2; font-size:9pt; margin:4px 0 0 18px; }
+</style></head><body>
+
+<h1>From Geometry as Input to Geometry as Guidance:<br>A Research Direction for Self-Supervised MVS</h1>
+<div class="sub">Research direction proposal, for approval · GeoFusionNet / GeoCorr project · Gobika S · 2026-10-10 · repository <code>main @ 5572daf</code></div>
+
+<div class="box">
+<b>Summary.</b> The project set out to beat a self-supervised GeoMVS baseline on DTU by feeding a monocular geometric prior into the network: a separate geometry encoder (GGF) and a candidate-depth geometry correction (GeoCorr Lite). After freezing a reproducible baseline (<b>A0f, 0.491 ± 0.009 mm overall</b>, 3 seeds, full-resolution DTU), we tested the prior as an input, as a confidence-gated replacement and as a loss. <b>As an input it did nothing measurable.</b> The prior is too inaccurate in metric terms (median error 28 mm at the ambiguous pixels) to pick the right depth. Two later results changed the picture:
+<ol>
+<li>A larger cost-volume network (B2) reaches <b>0.414 / 0.418</b> (2 seeds).</li>
+<li>On that network, the prior works as a <b>training-only</b> signal. Removing it worsens overall from 0.418 to <b>0.436</b> (seed 2, measured 2026-10-10), and most of the loss is on the hard scans.</li>
+</ol>
+We propose to change the paper's thesis to match: <b>monocular foundation models should guide self-supervised MVS during training, targeted at the pixels where photometry is ambiguous, not enter the network as a depth input.</b> This document records everything done so far, explains the baseline, places the idea against the closest published work, and sets out the experiments, success criteria and expected outcome for which approval is requested.
+</div>
+
+<div class="box warn">
+<b>Novelty caveat, stated up front.</b> Injecting frozen Depth-Anything-V2 features into the reference-view features (our running B2_mono_feat) is <b>already published</b> in supervised MVS (MonoMVSNet, ICCV 2025). Using a depth-foundation prior for label-free MVS is also published (DFM-MVS, arXiv 2025). So neither can be the paper's main claim. The proposed contribution is the <b>ambiguity-targeted, scale-free use of the monocular prior inside the photometric self-supervised objective</b> (Section 8.3), plus the diagnostic evidence for why the prior has to be used that way. Section 9 compares this with prior work in detail.
+</div>
+
+<b>Contents</b>
+<ol class="toc">
+<li>Problem and goal</li><li>The original plan</li><li>The baseline (Stage 0), explained</li><li>What was done, from the start</li>
+<li>Why geometry as an input failed</li><li>What did work</li><li>Lessons that shape the new direction</li><li>The new direction</li>
+<li>Novelty and related work</li><li>Experimental plan and decision gates</li><li>Expected outcome</li><li>Risks and mitigations</li><li>Approval requested</li><li>Glossary and sources</li>
+</ol>
+
+<h2>1. Problem and goal</h2>
+<p><b>Task.</b> Multi-view stereo (MVS): given a reference image, several source images and known cameras, estimate a depth map per view, then fuse the depth maps into a 3D point cloud. We evaluate on the DTU benchmark: 22 test scans, scored by accuracy (prediction to ground truth), completeness (ground truth to prediction) and overall (their mean), in mm, lower is better.</p>
+<p><b>Setting.</b> <i>Self-supervised</i> (unsupervised) MVS. No ground-truth depth is used in training. The network learns from a photometric loss: if the predicted depth is right, warping source images into the reference view should reproduce the reference image. External pretrained models (here Depth-Anything-V2) are allowed as auxiliary priors and are disclosed as such.</p>
+<p><b>Core difficulty.</b> On textureless, reflective or repetitive surfaces, many depth candidates explain the images equally well, so the photometric signal cannot pick the true surface. We measured this directly (Section 5): at the failing pixels <b>the training loss itself prefers a wrong depth</b>. Any method that only reshapes the photometric objective cannot fix those pixels. Information has to come from outside the images' photometric consistency.</p>
+
+<h2>2. The original plan: geometry as an input (GeoFusionNet + GeoCorr Lite)</h2>
+<p>The design report (<code>docs/architecture_comparison.md</code>, <code>docs/baseline_recovery_plan.md</code>) proposed two ways to bring geometry into the network:</p>
+<ul>
+<li><b>GeoFusionNet (representation level):</b> a <i>separate geometry encoder</i> reads a geometric prior G (depth, normals, validity) and a Geometry-Guided Fusion (GGF) block adds its features to the RGB features as a zero-initialized residual.</li>
+<li><b>GeoCorr Lite (scoring level):</b> a small 1×1-conv head turns 6 to 8 scalar compatibility cues per (pixel, view, depth candidate) into a residual on the matching score, controlled by a learned reliability gate. Example cues: distance to the prior, reprojection error, normal disagreement.</li>
+</ul>
+<p>Both were staged behind a reproduced baseline (Stage 0 → GGF → fixed GeoCorr → learned gate → view weighting → optional sampling), with zero-initialization so that each stage starts from the previous model.</p>
+<p>The prior <b>G</b> is Depth-Anything-V2-Small relative inverse depth, anchored per view to metric mm by a RANSAC fit (1/z = s·g + t) to SIFT points triangulated with the known DTU cameras. No ground truth is used, so the self-supervised claim holds.</p>
+
+<figure>
+<svg width="680" height="150" viewBox="0 0 680 150" font-family="DejaVu Sans, Arial" font-size="9.5">
+  <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <g stroke="#555" fill="none" stroke-width="1.2">
+    <rect x="5" y="15" width="95" height="34" rx="4" fill="#eef2f8"/>
+    <rect x="5" y="95" width="95" height="34" rx="4" fill="#fdf1e3"/>
+    <rect x="130" y="15" width="100" height="34" rx="4" fill="#eef2f8"/>
+    <rect x="130" y="95" width="100" height="34" rx="4" fill="#fdf1e3"/>
+    <rect x="260" y="50" width="90" height="44" rx="4" fill="#fdf1e3"/>
+    <rect x="380" y="50" width="95" height="44" rx="4" fill="#eef2f8"/>
+    <rect x="505" y="50" width="80" height="44" rx="4" fill="#fdf1e3"/>
+    <rect x="610" y="50" width="65" height="44" rx="4" fill="#eef2f8"/>
+    <path d="M100,32 H130" marker-end="url(#ar)"/><path d="M100,112 H130" marker-end="url(#ar)"/>
+    <path d="M230,32 H245 V65 H260" marker-end="url(#ar)"/><path d="M230,112 H245 V80 H260" marker-end="url(#ar)"/>
+    <path d="M350,72 H380" marker-end="url(#ar)"/><path d="M475,72 H505" marker-end="url(#ar)"/><path d="M585,72 H610" marker-end="url(#ar)"/>
+    <path d="M52,129 V143 H545 V94" stroke-dasharray="3,2" marker-end="url(#ar)"/>
+  </g>
+  <g fill="#1d1d1f" text-anchor="middle">
+    <text x="52" y="30">RGB images</text><text x="52" y="42" font-size="8">5 views</text>
+    <text x="52" y="110">Prior G</text><text x="52" y="122" font-size="8">DA-V2 + SIFT anchor</text>
+    <text x="180" y="30">RGB encoder</text>
+    <text x="180" y="110">Geometry encoder</text><text x="180" y="122" font-size="8">(separate)</text>
+    <text x="305" y="68">GGF fusion</text><text x="305" y="81" font-size="8">zero-init residual</text>
+    <text x="427" y="68">Cost volume +</text><text x="427" y="81">3D regularizer</text>
+    <text x="545" y="68">GeoCorr Lite</text><text x="545" y="81" font-size="8">score residual</text>
+    <text x="642" y="75">Depth</text>
+    <text x="300" y="140" font-size="8" fill="#5b5b60">prior cues per depth candidate</text>
+  </g>
+</svg>
+<figcaption>Figure 1. The original design. Orange boxes are where the prior G enters the network. Section 5 shows that this route gave no measurable gain.</figcaption>
+</figure>
+
+<h2>3. The baseline (Stage 0), explained</h2>
+<p>A reproducible baseline had to come first: an architectural gain means nothing if it is within the baseline's run-to-run spread. The frozen Stage 0 baseline is <b>A0f</b> (<code>configs/ablations/A0f_fixes_only_short.yaml</code>, frozen 2026-09-27).</p>
+<h3>3.1 Architecture</h3>
+<table>
+<tr><th style="width:28%">Component</th><th>A0f (Stage 0)</th></tr>
+<tr><td>Input</td><td>5 views (1 reference + 4 source); training at 640×512, testing at 1600×1152</td></tr>
+<tr><td>Feature encoder</td><td>Small RGB CNN, features at 1/4, 1/2 and full resolution</td></tr>
+<tr><td>Cascade</td><td>3 stages, CasMVSNet-style: 48 → 32 → 8 depth candidates at 1/4, 1/2 and 1 resolution. Each stage searches a narrowed window around the previous stage's depth.</td></tr>
+<tr><td>Cost volume</td><td>Variance across views, reduced to 1 channel, into a 2-level 3D CNN regularizer. Two fixes we found and made default: <b>out-of-view masking</b> of source samples, and <b>trilinear upsampling</b> in the regularizer. Together they cut "sawtooth" probability artifacts from 41% to 0.1% of wrong pixels.</td></tr>
+<tr><td>Depth</td><td>Softmax over candidates (higher score = better), expectation gives depth, and the probability gives confidence</td></tr>
+<tr><td>Size</td><td>121k parameters used (215k including the geometry encoder, which A0f does not use), peak test memory 12.7 GB at 1600×1152</td></tr>
+</table>
+<h3>3.2 Self-supervised objective</h3>
+<p>L = L_photo + 0.1·L_smooth (+ 0.5·L_geo in A0f). Each term:</p>
+<ul>
+<li><b>L_photo:</b> 0.85·SSIM + 0.15·L1 between the reference image and each warped source image, averaged over the 4 source views.</li>
+<li><b>L_smooth:</b> edge-aware smoothness on depth normalized by the per-image mean. Raw-mm smoothness was the cause of an early constant-depth failure, about 67 mm error.</li>
+<li><b>L_geo:</b> mean-normalized |D − G| on valid prior pixels.</li>
+</ul>
+<h3>3.3 Training chain (per seed)</h3>
+<ol>
+<li><code>A0_baseline</code>: 20k steps, constant lr 1e-3.</li>
+<li><code>A0_finetune_clmvs</code>: 6k steps with CL-MVSNet's LR recipe (lr 5e-4, step decay).</li>
+<li><code>A0f</code>: 1.5k steps with the cost-volume fixes on.</li>
+</ol>
+<p>The whole chain is about 23.5 GPU-hours per seed on one NVIDIA A30.</p>
+<h3>3.4 Evaluation protocol</h3>
+<p>Fusion uses GeoMVSNet's open3d pipeline: probability > 0.3, 0.2 mm, at least 4 consistent views. Scoring uses the official DTUeval-python metric, cross-checked against the unmodified reference script. All 22 test scans at full resolution 1600×1152, 3 seeds.</p>
+<p>All numbers measured before 2026-09-23 used a non-official metric with no fusion filtering, and are invalid.</p>
+<h3>3.5 Baseline numbers</h3>
+<table>
+<tr><th>Model (our evaluator, 22 scans, 1600×1152)</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th><th>Notes</th></tr>
+<tr><td>A0 (before cost-volume fixes)</td><td class="n">0.447</td><td class="n">0.586</td><td class="n">0.517</td><td>Superseded</td></tr>
+<tr><td><b>A0f Stage 0</b>, 3 seeds</td><td class="n">0.437 ± 0.003</td><td class="n">0.545 ± 0.016</td><td class="n"><b>0.491 ± 0.009</b></td><td>Seeds: 0.497 / 0.498 / 0.479</td></tr>
+<tr><td>CL-MVSNet released point clouds</td><td class="n"></td><td class="n"></td><td class="n">0.438</td><td>Their published plys, scored with our evaluator</td></tr>
+</table>
+<div class="box warn"><b>Comparability.</b> CL-MVSNet reports 0.329 in its paper, but its released point clouds score 0.438 under our evaluator. The difference comes from fusion: CL-MVSNet uses a per-scan tuned filter (confidence 0.8, 3 source views, relative depth 0.001). So <b>our numbers can be compared with 0.438, not with published figures.</b> A paper submission needs both: our fixed protocol and the fusion used by the published methods (work item E9, Section 10).</div>
+
+<h2>4. What was done, from the start</h2>
+<table>
+<tr><th style="width:15%">Dates (2026)</th><th style="width:26%">Work</th><th>Outcome</th></tr>
+<tr><td>09-23</td><td>First A0 runs; prior G built and cached</td><td>Constant-depth failure traced to unnormalized smoothness and fixed. A wrong score sign was ruled out. G anchored on 88.7% of views; textureless scans often fail to anchor.</td></tr>
+<tr><td>09-23 to 09-24</td><td>Evaluation rebuilt</td><td>Official fusion and metric adopted; full-res 1600×1152 test path added. Earlier numbers declared invalid.</td></tr>
+<tr><td>09-25</td><td>Convergence and objective study vs CL-MVSNet</td><td>A0 had seen about 9% of the reference training samples. The CL-MVSNet LR recipe gave only about 5%, so the LR schedule is not the cause. Widening the cascade windows at test time made results worse, so the narrowing is not the bottleneck.</td></tr>
+<tr><td>09-25</td><td>Cost-volume profile probe (scan48)</td><td>Photometric ambiguity diagnosed: at wrong pixels, GT is the global cost minimum on only 30%, a secondary minimum on 41% and no minimum on 28%. Our loss prefers GT on only 42% of them, L0.5 min-view on 12%.</td></tr>
+<tr><td>09-26 to 09-27</td><td>Cost-volume fixes; CL-MVSNet consistency loss (ICC + SCC) ported</td><td>The fixes removed the sawtooth but not the ambiguity. Consistency was within noise and worse on scan48 (4.34 vs 3.45 mm), so it was dropped. <b>A0f frozen as Stage 0</b>; 3-seed official evaluation 0.491 ± 0.009.</td></tr>
+<tr><td>10-06</td><td><b>B1: G as input</b> through the separate geometry encoder + zero-init GGF</td><td><b class="bad">No gain</b> against the matched control (val fine 1.552 vs 1.540 mm; competing dips 18.53 vs 18.42%).</td></tr>
+<tr><td>10-06</td><td>L_geo removed (1.5k-step continuation of A0f)</td><td>Within noise, so on A0f the prior loss has no measurable effect.</td></tr>
+<tr><td>10-06</td><td>Prior quality, 22 scans</td><td>Median |G − GT| is 5 to 69 mm per scan (the model's is 0.8 to 4 mm). At ambiguous pixels G is nearer the true dip on only 52.4% and within 4 mm on only 11.5%.</td></tr>
+<tr><td>10-06 to 10-07</td><td>Confidence gates (thresholds fit on val) and gated fusion</td><td>Only "G disagrees with the coarse depth by ≥ 99.3 mm" passes the pre-registered 20%/80% rule. Through fusion: 0.479 → 0.470, almost all from scans 48 and 77.</td></tr>
+<tr><td>10-06 to 10-09</td><td><b>B2: capacity</b> (FPN encoder, 8-group correlation, 3D U-Net; 2.03M params)</td><td><b class="good">0.418 (seed 2), 0.414 (seed 0)</b>. Better than A0f seed 2 on 17/22 scans; scan48 1.213 → 0.708. A pass-through check shows the gain is in where the points land, not how many survive fusion.</td></tr>
+<tr><td>10-09</td><td>B2_mono_feat implemented (frozen DA-V2-S features, zero-init) and queued</td><td>Identity test passes; results due around 10-11.</td></tr>
+<tr><td><b>10-10</b></td><td><b>B2_nogeo</b>: the B2 chain trained from scratch without L_geo</td><td><b class="good">The prior matters on B2:</b> overall 0.418 → <b>0.436</b> without it (new result, details in Section 6.2).</td></tr>
+</table>
+
+<h2>5. Why geometry as an input failed</h2>
+<p>The diagnostic chain behind the decision to move away from the original design:</p>
+<ol>
+<li><b>The failure is an ambiguity, not a bug.</b> On the outlier scans (11, 13, 48, 62, 77) the cost volume often has two or more competing minima. The photometric loss itself scores the wrong one as better. A more robust loss (L0.5, min-view), best-k view aggregation, wider search windows, an LR recipe and consistency distillation all failed to change this (Section 4).</li>
+<li><b>The prior's metric depth is too coarse to break the tie.</b> At ambiguous pixels the competing dips are a median 60 mm apart, but G's error there is 27.7 mm. So G lands nearer the right dip only 52.4% of the time, about a coin flip. G comes within 4 mm (useful as a depth value) on just 11.5% of those pixels. Much of this error is per-view anchoring error in scale and shift from sparse SIFT points, not error in the monocular model's shape.</li>
+<li><b>The network ignores the input.</b> Given as an input through the separate encoder (B1), G changed neither the depth error nor the competing-dip share beyond the control's own run-to-run swing. A zero-initialized branch that carries a coin-flip signal stays near zero.</li>
+<li><b>Hard gating helps only gross outliers.</b> The one gate that passes fires mainly where the model is already wrong by more than 10 cm. It raises the share of pixels within 4 mm by −0.46 points, so it barely changes accuracy. On B2 it is nearly a no-op (0.418 → 0.415).</li>
+</ol>
+<div class="box"><b>Conclusion.</b> The prior's <i>metric value</i> is unreliable exactly where it would be needed, so a design that feeds it in as depth (GGF input, GeoCorr Lite's prior-distance cue, gating) has little to gain. What the monocular model does get right is <i>relative structure</i>: local ordering, smoothness and discontinuities. The new direction builds on that.</div>
+
+<h2>6. What did work</h2>
+<h3>6.1 Capacity (B2)</h3>
+<figure>
+<svg width="680" height="214" viewBox="0 0 680 214" font-family="DejaVu Sans, Arial" font-size="9.5">
+  <g fill="#1d1d1f">
+  <text x="0" y="22">A0 (before fixes)</text>
+  <text x="0" y="48">A0f Stage 0, 3-seed mean</text>
+  <text x="0" y="74">A0f seed 2</text>
+  <text x="0" y="100">CL-MVSNet plys (our evaluator)</text>
+  <text x="0" y="126">B2_nogeo seed 2 (no L_geo)</text>
+  <text x="0" y="152">B2 seed 2</text>
+  <text x="0" y="178">B2 seed 0</text>
+  </g>
+  <!-- scale: 0..0.55 mm -> 0..380 px, x0=190 -->
+  <g>
+  <rect x="190" y="12" width="357" height="14" rx="2" fill="#b7c0cc"/><text x="552" y="23">0.517</text>
+  <rect x="190" y="38" width="339" height="14" rx="2" fill="#2b5797"/><text x="534" y="49">0.491 ± 0.009</text>
+  <rect x="190" y="64" width="331" height="14" rx="2" fill="#b7c0cc"/><text x="526" y="75">0.479</text>
+  <rect x="190" y="90" width="303" height="14" rx="2" fill="#d6d6d6"/><text x="498" y="101">0.438</text>
+  <rect x="190" y="116" width="301" height="14" rx="2" fill="#b7c0cc"/><text x="496" y="127">0.436</text>
+  <rect x="190" y="142" width="289" height="14" rx="2" fill="#2b5797"/><text x="484" y="153">0.418</text>
+  <rect x="190" y="168" width="286" height="14" rx="2" fill="#2b5797"/><text x="481" y="179">0.414</text>
+  </g>
+  <line x1="190" y1="6" x2="190" y2="190" stroke="#888"/>
+  <text x="190" y="206" fill="#5b5b60" font-size="8.5">Overall DTU distance, mm (lower is better). 22 test scans, 1600×1152, same fusion and evaluator. Bars start at 0.</text>
+</svg>
+<figcaption>Figure 2. Headline results under one protocol. Dark bars: Stage 0 and B2 with L_geo; light bars: references and ablations.</figcaption>
+</figure>
+<p>B2 changes only the matching network: an FPN encoder (32/96/192), 8-group correlation cost, and a 2-level 3D U-Net regularizer, 2.03M parameters in total. Training chain, loss and protocol are unchanged.</p>
+<p>Fused point clouds improve a lot (completeness 0.36 vs 0.52). Per-view depth metrics are slightly worse, though: val fine median 1.76 vs 1.52 mm. That mismatch is not yet explained (risk R4).</p>
+
+<h3>6.2 The prior as a training signal (new, measured 2026-10-10)</h3>
+<p>B2_nogeo is the full B2 chain (20k + 6k + 1.5k steps) with geo_weight 0, everything else identical, seed 2. Unlike the A0f no-geo test (a 1.5k-step continuation), the network never sees L_geo at any point.</p>
+<table>
+<tr><th>Seed 2, 22 scans, 1600×1152</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th><th class="n">scan48</th><th class="n">scan77</th><th class="n">scan62</th><th class="n">scan11</th><th class="n">Val fine med / cov</th></tr>
+<tr><td>A0f</td><td class="n">0.435</td><td class="n">0.523</td><td class="n">0.479</td><td class="n">1.213</td><td class="n">0.809</td><td class="n">0.715</td><td class="n">0.737</td><td class="n">1.52 mm / —</td></tr>
+<tr><td><b>B2 (with L_geo)</b></td><td class="n">0.473</td><td class="n"><b>0.362</b></td><td class="n"><b>0.418</b></td><td class="n"><b>0.708</b></td><td class="n"><b>0.633</b></td><td class="n"><b>0.524</b></td><td class="n"><b>0.602</b></td><td class="n">1.76 mm / 76.9%</td></tr>
+<tr><td>B2_nogeo (no L_geo)</td><td class="n">0.461</td><td class="n">0.410</td><td class="n">0.436</td><td class="n">0.870</td><td class="n">0.740</td><td class="n">0.570</td><td class="n">0.681</td><td class="n">1.81 mm / 74.0%</td></tr>
+</table>
+<ul>
+<li>Removing L_geo costs <b>+0.018 overall</b>, entirely through completeness (+0.048); accuracy is slightly better (−0.012). For scale, B2's two seeds differ by 0.004 and A0f's seed std is 0.009.</li>
+<li>The loss is concentrated on the <b>ambiguous outlier scans</b>: scan48 +0.162, scan77 +0.107, scan11 +0.079, scan62 +0.046, scan32 +0.046. The exception is scan13, where B2_nogeo is better (0.521 vs 0.561). B2 with L_geo is better on only 11/22 scans, so on the easy scans the prior is neutral or slightly harmful.</li>
+<li>On scan48, per-view depth also degrades without L_geo: fine median 4.57 vs 3.96 mm, GT coverage 61.6 vs 66.7%.</li>
+</ul>
+<div class="box warn"><b>Caveat.</b> This is a single seed. Matched B2_nogeo seeds 0 and 1 are part of the plan (E3). The contrast with A0f, where L_geo had no effect, suggests the prior's training signal only helps once the network has enough capacity to absorb it. That hypothesis is not yet tested directly.</div>
+
+<h2>7. Lessons that shape the new direction</h2>
+<table>
+<tr><th style="width:4%">#</th><th style="width:40%">Lesson (evidence)</th><th>Design consequence</th></tr>
+<tr><td>L1</td><td>Photometry prefers the wrong depth at ambiguous pixels (probe: our loss picks GT at 42% of wrong pixels)</td><td>The missing information must come from outside photometric consistency</td></tr>
+<tr><td>L2</td><td>G's metric value is a coin flip at those pixels (52.4%), within 4 mm on 11.5%</td><td>Do not feed metric G as depth; use scale-free structure</td></tr>
+<tr><td>L3</td><td>As an input, G is ignored (B1 ≈ control)</td><td>Use the prior where gradients force its use: in the training objective</td></tr>
+<tr><td>L4</td><td>As a loss, G helps B2 by 0.018, mostly on the hard scans (B2 vs B2_nogeo)</td><td>Training-time guidance is the working mechanism, and it costs nothing at test time</td></tr>
+<tr><td>L5</td><td>The gain sits on 5 to 6 scans; the easy scans are neutral or slightly worse</td><td>Apply the prior <i>only where photometry is ambiguous</i> and leave confident pixels to photometry</td></tr>
+<tr><td>L6</td><td>The ambiguity is visible in the model's own cost volume (competing dips: 12.9% of valid pixels on scan48 for B2)</td><td>The network can find these pixels itself: no ground truth, no hand-made masks</td></tr>
+</table>
+
+<h2>8. The new direction</h2>
+<div class="box okbox"><b>Thesis.</b> In self-supervised MVS, a monocular depth foundation model is most useful as a <i>training-time referee</i> between the photometrically tied depth hypotheses found by the network's own cost volume, applied through scale-free relative-depth constraints. It should not be a depth input or a global pseudo-label. The trained MVS network needs no monocular model at test time.</div>
+
+<h3>8.1 Components</h3>
+<table>
+<tr><th style="width:5%">ID</th><th style="width:30%">Component</th><th style="width:15%">Status</th><th>Role and novelty</th></tr>
+<tr><td>C1</td><td>Capacity backbone (B2)</td><td><span class="tag m">measured</span></td><td>Enabler. Standard parts (FPN, group correlation, 3D U-Net); not claimed as novel.</td></tr>
+<tr><td>C2</td><td>Global prior loss L_geo (metric G, normalized L1)</td><td><span class="tag m">measured (1 seed)</span></td><td>The <b>baseline for our contribution</b>. It shows that training-time guidance works (Section 6.2). It is close to existing pseudo-label approaches, so not novel.</td></tr>
+<tr><td>C3</td><td>Frozen DA-V2-S reference features, zero-init 1×1 projection (B2_mono_feat)</td><td><span class="tag p">running; due ~10-11</span></td><td>An orthogonal, representation-level ablation. <b>Same mechanism as MonoMVSNet's feature fusion</b> (supervised). It belongs in the final model only if it adds gain on top of C4, and is reported as an adopted component.</td></tr>
+<tr><td>C4</td><td><b>Ambiguity-targeted scale-free monocular guidance (proposed)</b></td><td><span class="tag n">not implemented</span></td><td><b>Main contribution.</b> Details in 8.3.</td></tr>
+</table>
+
+<h3>8.2 Pipeline</h3>
+<figure>
+<svg width="680" height="190" viewBox="0 0 680 190" font-family="DejaVu Sans, Arial" font-size="9.5">
+  <defs><marker id="ar2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#555"/></marker></defs>
+  <rect x="0" y="5" width="680" height="80" rx="6" fill="#f4f6fa"/>
+  <text x="8" y="18" font-size="8.5" fill="#5b5b60">TEST TIME and TRAINING: the MVS network</text>
+  <g stroke="#555" fill="none" stroke-width="1.2">
+    <rect x="10" y="30" width="80" height="40" rx="4" fill="#fff"/>
+    <rect x="115" y="30" width="105" height="40" rx="4" fill="#fff"/>
+    <rect x="245" y="30" width="135" height="40" rx="4" fill="#fff"/>
+    <rect x="405" y="30" width="110" height="40" rx="4" fill="#fff"/>
+    <rect x="540" y="30" width="80" height="40" rx="4" fill="#fff"/>
+    <path d="M90,50 H115" marker-end="url(#ar2)"/><path d="M220,50 H245" marker-end="url(#ar2)"/><path d="M380,50 H405" marker-end="url(#ar2)"/><path d="M515,50 H540" marker-end="url(#ar2)"/>
+  </g>
+  <g fill="#1d1d1f" text-anchor="middle">
+    <text x="50" y="47">5 RGB</text><text x="50" y="59">views</text>
+    <text x="167" y="47">FPN encoder</text><text x="167" y="59" font-size="8">(+ C3 mono feat.)</text>
+    <text x="312" y="47">Group-corr cost volume</text><text x="312" y="59" font-size="8">+ 3D U-Net (C1)</text>
+    <text x="460" y="47">Prob. volume</text><text x="460" y="59" font-size="8">per stage</text>
+    <text x="580" y="47">Depth +</text><text x="580" y="59">confidence</text>
+  </g>
+  <rect x="0" y="100" width="680" height="85" rx="6" fill="#fdf8ef"/>
+  <text x="8" y="113" font-size="8.5" fill="#5b5b60">TRAINING ONLY: losses (no monocular model needed at test time unless C3 is kept)</text>
+  <g stroke="#555" fill="none" stroke-width="1.2">
+    <rect x="10" y="125" width="130" height="48" rx="4" fill="#fff"/>
+    <rect x="165" y="125" width="150" height="48" rx="4" fill="#fff"/>
+    <rect x="340" y="125" width="175" height="48" rx="4" fill="#fff" stroke="#c77c02" stroke-width="2"/>
+    <rect x="540" y="125" width="130" height="48" rx="4" fill="#fff"/>
+    <path d="M460,70 V125" stroke-dasharray="3,2" marker-end="url(#ar2)"/>
+    <path d="M315,149 H340" marker-end="url(#ar2)"/>
+  </g>
+  <g fill="#1d1d1f" text-anchor="middle">
+    <text x="75" y="145">L_photo + L_smooth</text><text x="75" y="158" font-size="8">(unchanged)</text>
+    <text x="240" y="141">DA-V2 relative depth</text><text x="240" y="154" font-size="8">frozen, per reference view,</text><text x="240" y="165" font-size="8">no metric anchoring</text>
+    <text x="427" y="141" font-weight="bold">C4: ambiguity mask from</text><text x="427" y="154" font-weight="bold">competing dips + scale-free</text><text x="427" y="165" font-weight="bold">ranking / local-fit loss</text>
+    <text x="605" y="145">C2: global L_geo</text><text x="605" y="158" font-size="8">(baseline to beat)</text>
+  </g>
+</svg>
+<figcaption>Figure 3. Proposed system. C4 (orange outline) reads the network's own probability volume to find tied hypotheses and uses the monocular model only to rank them.</figcaption>
+</figure>
+
+<h3>8.3 C4: ambiguity-targeted, scale-free monocular guidance</h3>
+<p>The goal is to apply the monocular signal only where photometry cannot decide, and only in a form the monocular model gets right.</p>
+<ol>
+<li><b>Find the ambiguous pixels from the model itself.</b> At each training step, mark a pixel ambiguous when the coarse-stage probability volume has a second local maximum within a ratio τ of the first, separated by at least k bins. This is the "competing dips" measure we already compute in <code>scripts/costvol_diag.py</code>, here computed without gradient and used as a mask. τ and k are fixed on dtu_val before any test evaluation.</li>
+<li><b>Use the monocular depth only up to a local affine fit, not as a metric value.</b> In a window around each ambiguous pixel, fit scale and shift of DA-V2's inverse depth to the network's own <i>confident</i> depths. These are unambiguous pixels with high probability, so no SIFT anchoring and no ground truth are needed. The fitted local depth then serves as a referee among the K candidate dips.</li>
+<li><b>Train with a loss on the candidates, not a regression to G.</b> Two variants, to be compared:
+  <ul>
+  <li>(a) <i>Dip selection:</i> cross-entropy on the probability volume that raises the dip nearest the locally fitted monocular depth, weighted by how clearly it wins.</li>
+  <li>(b) <i>Relative ranking:</i> a pairwise ordinal loss on sampled pixel pairs inside the ambiguous region, enforcing DA-V2's depth ordering.</li>
+  </ul></li>
+<li><b>Leave confident pixels alone.</b> Outside the mask, the objective is exactly the photometric baseline. This targets L5, the slight harm of global L_geo on easy scans.</li>
+</ol>
+<p><b>Why this should work better than C2.</b> Global L_geo pulls every pixel toward a metric G with a 5 to 69 mm median error. C4 asks the prior a different question: which of these two or three candidates is right? It answers in a local, scale-free frame calibrated by the network's own correct pixels. Lesson L2 says the metric answer is a coin flip. Whether the local, scale-free answer is better is <b>measured cheaply before any training</b> (gate G1).</p>
+<p><b>What makes this a self-supervised contribution.</b> No labels, and no SfM anchoring at training time. The prior plays the role of the missing tie-breaker, which is exactly the information the photometric loss lacks (L1).</p>
+
+<h2 class="pb">9. Novelty and related work</h2>
+<table>
+<tr><th style="width:17%">Work</th><th style="width:12%">Supervision</th><th style="width:33%">How the monocular / foundation prior is used</th><th>Relation to this proposal</th></tr>
+<tr><td><b>MonoMVSNet</b> (Jiang et al., ICCV 2025)</td><td>Supervised (GT depth, cross-entropy)</td><td>Frozen DA-V2 (ViT-S) reference feature, conv-projected, upsampled and <b>added to the reference FPN feature</b>; cross-view position encoding and attention to source views; aligned mono depth replaces candidates at edge pixels; relative consistency loss. DTU 0.278.</td><td><b>Overlaps with C3</b> (essentially the same injection). Its relative-consistency loss is also related to C4(b). Differences: we are self-supervised, and our guidance is restricted to pixels the network flags as photometrically tied.</td></tr>
+<tr><td><b>DFM-MVS</b> (Zhu et al., arXiv 2504.11845, 2025)</td><td>No real labels (pseudo-supervised)</td><td>DA-V2 relative depth denormalized with SfM range; the reference image is warped with it to create <b>synthetic training pairs with the prior as the label</b>; at test time, low-confidence coarse depths are corrected by a global linear fit to high-confidence pixels. DTU 0.317.</td><td>Closest in setting. Differences: it trains on synthetic correspondences and uses the prior as a dense label everywhere, plus a <i>test-time, global</i> fit. C4 keeps the photometric objective on real images, uses a <i>training-time, local</i> fit, and acts only on cost-volume ties. Its test-time fit is a natural baseline for C4.</td></tr>
+<tr><td>ADP-MVSNet (Xiang &amp; Yin, ICIP 2024)</td><td>Self-supervised</td><td>Adaptive depth priors used as pseudo-labels</td><td>Related pseudo-label line; to be read in full before submission</td></tr>
+<tr><td>CL-MVSNet, RC-MVSNet, KD-MVS, SSC-MVS</td><td>Self-supervised</td><td>No monocular prior: contrastive consistency, rendering consistency, distillation, pseudo-labels</td><td>Main self-supervised baselines. We ported CL-MVSNet's ICC/SCC; no gain on scan48 (Section 4).</td></tr>
+</table>
+<div class="box">
+<b>Claimed contributions, if the plan succeeds:</b>
+<ol>
+<li><b>Diagnosis.</b> A quantitative analysis showing that photometric self-supervision <i>prefers</i> wrong hypotheses on ambiguous surfaces, and that robust losses, view selection, consistency distillation and metric-prior inputs do not change this. This rests on measurements we already have (cost-profile probes, prior-vs-dip analysis, matched pairs).</li>
+<li><b>Method (C4).</b> Ambiguity-targeted, scale-free monocular guidance inside photometric self-supervision, with no test-time monocular model and no metric anchoring.</li>
+<li><b>Finding.</b> The value of a monocular training signal depends on matching capacity: no effect on the 121k-parameter model, a clear effect on the 2M-parameter one. This needs its own matched test (E7).</li>
+</ol>
+<b>Not claimed as novel:</b> frozen foundation-feature injection (C3), capacity changes (C1), global prior loss (C2).
+</div>
+<p class="small">The literature check is a first pass (2026-10-10, two web searches plus the MonoMVSNet and DFM-MVS paper pages). A systematic review of 2024 to 2026 self-supervised MVS papers that use monocular priors is item E0 and must be done before writing.</p>
+
+<h2>10. Experimental plan and decision gates</h2>
+<p>All runs use the frozen protocol from Section 3.4. Each comparison is a matched pair (same init, same sample order, one change). Thresholds marked "val" are fixed on dtu_val before the test set is touched.</p>
+<table>
+<tr><th style="width:5%">ID</th><th style="width:37%">Experiment</th><th style="width:18%">Compute (A30)</th><th>Status / gate</th></tr>
+<tr><td>E0</td><td>Systematic literature review (self-supervised MVS + monocular priors, 2024 to 2026)</td><td>none</td><td>Before E5. If C4's core idea is found published, re-scope before investing GPU time.</td></tr>
+<tr><td>E1</td><td>B2 seed 1 → B2 3-seed mean ± std</td><td>running</td><td>Due ~10-11 07:30 UTC</td></tr>
+<tr><td>E2</td><td>B2_mono_feat seed 2 vs B2_nogeo seed 2 (C3)</td><td>~4 h, queued</td><td>Due ~10-11. Keep C3 only if overall improves by more than 0.009 (A0f seed std).</td></tr>
+<tr><td>E3</td><td>B2_nogeo seeds 0 and 1 (confirm L4)</td><td>~2 days</td><td><b>G0:</b> L_geo helps on ≥ 2 of 3 seeds, mean gain ≥ 0.009</td></tr>
+<tr><td>E4</td><td><b>Offline referee test, no training</b>: on B2 seed 2 cost volumes, does the local scale-free DA-V2 fit pick the true dip more often than metric G?</td><td>a few hours</td><td><b>G1 (go/no-go for C4):</b> on val ambiguous pixels, true-dip selection ≥ 65% (metric G: 52.4%) at ≥ 20% coverage</td></tr>
+<tr><td>E5</td><td>Implement C4 (a) and (b); short phase-3 runs from B2_nogeo_finetune seed 2</td><td>~1 day</td><td>Unit tests (identity when the mask is empty); choose the variant on val</td></tr>
+<tr><td>E6</td><td>Full chain: B2 + C4 vs B2 + C2 (L_geo), 3 seeds</td><td>~3 to 4 days</td><td><b>G2:</b> C4 better than C2 by more than 1 std, and no worse on the 17 non-outlier scans</td></tr>
+<tr><td>E7</td><td>Capacity × guidance: C4 on the A0f backbone</td><td>~1.5 days</td><td>Tests contribution 3</td></tr>
+<tr><td>E8</td><td>Controls: shuffled prior (N1), noisy or dropped prior (N2), random ambiguity mask</td><td>~2 days</td><td>A gain that survives a shuffled prior is not caused by the prior</td></tr>
+<tr><td>E9</td><td>Published-protocol evaluation (CL-MVSNet-style fusion) of the final models</td><td>~1 day</td><td>Required for a fair table against published numbers</td></tr>
+<tr><td>E10</td><td>Generalization: Tanks and Temples (loader exists; data availability to confirm)</td><td>~1 to 2 days</td><td>F-score; checks that the gain transfers beyond DTU</td></tr>
+</table>
+<p class="small">Total: about 2.5 to 3.5 weeks of single-GPU time after E1/E2 finish, assuming G0 and G1 pass. Estimates use the measured ~23.5 h per full chain and ~1.5 h per full-resolution evaluation.</p>
+
+<h2>11. Expected outcome</h2>
+<p>These are targets and hypotheses, <b>not results</b>. Each has a pre-registered test from Section 10.</p>
+<table>
+<tr><th style="width:32%">Hypothesis</th><th style="width:34%">Expected outcome if correct</th><th>What would falsify it</th></tr>
+<tr><td>H1: training-time monocular guidance helps a capacity backbone (L4)</td><td>B2 + L_geo better than B2_nogeo on 3 seeds, by about 0.01 to 0.02 overall, mostly in completeness on scans 11/48/62/77</td><td>G0 fails: the seed-2 gap was noise</td></tr>
+<tr><td>H2: scale-free local fitting makes the prior a good referee</td><td>Dip selection rises well above the 52% of metric G</td><td>G1 fails, which stops C4 before any training cost</td></tr>
+<tr><td>H3: targeting ambiguous pixels beats global guidance</td><td>B2 + C4 better than B2 + C2 on the outlier scans with no loss on the easy ones. <b>Target: overall ≤ 0.40 mm</b> under our protocol (B2 2-seed mean 0.416; A0f 0.491)</td><td>G2 fails: C4 ≈ C2, or C4 hurts easy scans</td></tr>
+<tr><td>H4: guidance needs capacity</td><td>C4 on A0f gives a clearly smaller gain than on B2</td><td>Equal gains on both backbones; the finding is then dropped and the method still stands</td></tr>
+</table>
+<div class="box okbox">
+<b>Expected final deliverable.</b> A self-supervised MVS paper (target: a CVPR/ICCV/ECCV-class venue or a strong journal such as IEEE TIP or TCSVT, depending on margins). Planned content:
+<ul>
+<li>the diagnosis of photometric ambiguity;</li>
+<li>method C4 and its controls;</li>
+<li>a fair comparison table: our protocol plus the published fusion protocol, with published and reproduced numbers kept separate;</li>
+<li>generalization to Tanks and Temples.</li>
+</ul>
+Under our evaluator, B2 already beats CL-MVSNet's released point clouds (0.414/0.418 vs 0.438). Whether that holds under the published fusion protocol is <b>not yet measured</b> (E9).
+</div>
+<div class="box warn"><b>Fallback if G1 or G2 fails.</b> The diagnosis remains publishable together with the capacity and L_geo findings. That would make an analysis paper ("why photometric self-supervision fails on ambiguous surfaces, and what monocular priors can and cannot fix"), with C2 and C3 as the measured remedies. This is a weaker but honest outcome, and it reuses all experiments already done.</div>
+
+<h2>12. Risks and mitigations</h2>
+<table>
+<tr><th style="width:5%">ID</th><th style="width:33%">Risk</th><th>Mitigation</th></tr>
+<tr><td>R1</td><td>C4's idea is already published (the field moves fast; MonoMVSNet and DFM-MVS are close)</td><td>E0 before implementation; position the paper on the self-supervised, ambiguity-targeted angle and the diagnosis</td></tr>
+<tr><td>R2</td><td>The single-seed L_geo effect (0.018) does not replicate</td><td>E3 (G0) before C4 is built on it</td></tr>
+<tr><td>R3</td><td>Our absolute numbers look weak next to published ones (0.41 vs 0.33) because of fusion differences</td><td>E9: report both protocols, and score the published plys with our evaluator (already done for CL-MVSNet)</td></tr>
+<tr><td>R4</td><td>B2 fuses better while per-view depth is worse; the mechanism is not understood</td><td>Report it honestly; add per-view depth metrics to every table; investigate if reviewers are likely to ask</td></tr>
+<tr><td>R5</td><td>The ambiguity mask becomes self-reinforcing (the network learns to hide ties)</td><td>Compute the mask from a detached probability volume; random-mask and shuffled-prior controls (E8); monitor competing-dip share over training</td></tr>
+<tr><td>R6</td><td>The monocular model's training data leaks geometry knowledge, so the self-supervised claim is questioned</td><td>Describe the method as "self-supervised MVS with an auxiliary pretrained monocular prior", as MonoMVSNet and DFM-MVS do; give the prior's provenance</td></tr>
+<tr><td>R7</td><td>Compute: one A30 GPU, ~1 day per full chain</td><td>Gates G0 and G1 stop failing lines early; phase-3 short runs before full chains</td></tr>
+</table>
+
+<h2>13. Approval requested</h2>
+<ol>
+<li><b>Change of thesis:</b> from "geometry as a network input (GGF / GeoCorr Lite)" to "monocular foundation guidance as a training-time referee for photometrically ambiguous pixels in self-supervised MVS". The geometry-input stages 1 to 5 of the original plan are closed, and their results are kept as negative evidence in the paper.</li>
+<li><b>Experimental plan E0 to E10</b> with gates G0 to G2 as written, including the stop rules.</li>
+<li><b>Compute:</b> about 3 to 4 weeks of single-A30 time.</li>
+<li><b>Positioning:</b> C3 (feature injection) is reported as an adopted component credited to MonoMVSNet, not as our contribution.</li>
+</ol>
+
+<h2>14. Glossary and sources</h2>
+<table>
+<tr><th style="width:22%">Term</th><th>Meaning</th></tr>
+<tr><td>Competing dips</td><td>Pixels whose raw matching cost has a secondary local minimum at GT while the global minimum is elsewhere; reported as % of valid pixels</td></tr>
+<tr><td>G (prior)</td><td>DA-V2-S relative inverse depth anchored to metric mm with SIFT points and known cameras (no GT)</td></tr>
+<tr><td>L_geo</td><td>Mean-normalized |D − G| on valid prior pixels, weight 0.5</td></tr>
+<tr><td>Matched pair</td><td>Two runs from the same initialization and sample order that differ in one setting</td></tr>
+<tr><td>Outlier scans</td><td>DTU scans 11, 13, 48, 62, 77, where errors concentrate</td></tr>
+<tr><td>Phase 3</td><td>The final 1.5k-step stage of the training chain</td></tr>
+</table>
+<p class="small"><b>Internal sources:</b> runs/A0f_fixes_only_short/aggregated_1600x1152.json; runs/B2_capacity/seed{0,2}/eval_1600x1152.json; runs/B2_nogeo/seed2/{eval_1600x1152.json, ckpt_final_costvol_diag.json, train.log}; runs/prior_confidence_val/; runs/prior_vs_dips/; runs/fusion_pass_diag/; NOTES.md; docs/; reports/project_status_2026-10-09.pdf. All numbers are measured unless marked as a target or not measured.<br>
+<b>External:</b> Jiang et al., "MonoMVSNet: Monocular Priors Guided Multi-View Stereo Network", ICCV 2025, arXiv 2507.11333. Zhu et al., "Boosting Multi-View Stereo with Depth Foundation Model in the Absence of Real-World Labels", arXiv 2504.11845. Xiang &amp; Yin, "Self-supervised multi-view stereo with adaptive depth priors", ICIP 2024. CL-MVSNet, arXiv 2503.08219.</p>
+</body></html>
