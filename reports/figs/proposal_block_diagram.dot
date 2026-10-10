@@ -1,0 +1,31 @@
+digraph proposal {
+  graph [rankdir=TB, splines=ortho, nodesep=0.6, ranksep=0.32, fontname="DejaVu Sans", bgcolor="white", pad=0.25];
+  node  [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=11, width=3.3, height=0.62, margin="0.14,0.06", penwidth=1.6];
+  edge  [color="#444444", penwidth=1.3, arrowsize=0.8];
+
+  m1 [label=<<b>Reference + 4 source views</b><br/><font point-size="9.5">DTU, no GT depth</font>>, fillcolor="#eeeeec", color="#8a8a85"];
+  m2 [label=<<b>Feature encoder</b><br/><font point-size="9.5">A0f 215k params, C1 larger</font>>, fillcolor="#d8efeb", color="#1a8a7a"];
+  m3 [label=<<b>Cascade cost volume</b><br/><font point-size="9.5">48, 32, 8 hypotheses</font>>, fillcolor="#d8efeb", color="#1a8a7a"];
+  m4 [label=<<b>GeoCorr Lite v0 (not run)</b><br/><font point-size="9.5">Gated penalty, alpha=0 control</font>>, style="rounded,filled,dashed", fillcolor="#efe9fb", color="#6a4fb0"];
+  m5 [label=<<b>3D regularization + soft-argmin</b><br/><font point-size="9.5">Per stage, coarse to fine</font>>, fillcolor="#d8efeb", color="#1a8a7a"];
+  m6 [label=<<b>Self-supervised loss</b><br/><font point-size="9.5">SSIM + L1 + smoothness</font>>, fillcolor="#d8efeb", color="#1a8a7a"];
+  m7 [label=<<b>Fusion + official DTU eval</b><br/><font point-size="9.5">1600x1152, acc / comp / overall</font>>, fillcolor="#eeeeec", color="#8a8a85"];
+
+  s1 [label=<<b>Track 1 (pending)</b><br/><font point-size="9.5">Frozen DA-V2-S, zero-init</font>>, style="rounded,filled,dashed", fillcolor="#efe9fb", color="#6a4fb0", width=2.6];
+  s2 [label=<<b>Prior cues (pending)</b><br/><font point-size="9.5">ref/src error, confidence</font>>, style="rounded,filled,dashed", fillcolor="#efe9fb", color="#6a4fb0", width=2.6];
+  s3 [label=<<b>GGF prior encoder</b><br/><font point-size="9.5">Tested, no effect, dropped</font>>, fillcolor="#eeeeec", color="#8a8a85", width=2.6];
+
+  m1 -> m2 -> m3 -> m4 -> m5 -> m6 -> m7;
+  {rank=same; m2; s1;}  {rank=same; m4; s2;}  {rank=same; m5; s3;}
+  s1 -> m2 [constraint=false, style=dashed, color="#6a4fb0"];
+  s2 -> m4 [constraint=false, style=dashed, color="#6a4fb0"];
+
+  subgraph cluster_legend {
+    label=""; color="#cccccc"; style="rounded"; margin=8;
+    lg1 [label="Baseline or measured", fillcolor="#d8efeb", color="#1a8a7a", width=2.0, height=0.36, fontsize=10];
+    lg2 [label="Pending or not run", style="rounded,filled,dashed", fillcolor="#efe9fb", color="#6a4fb0", width=2.0, height=0.36, fontsize=10];
+    lg1 -> lg2 [style=invis];
+    {rank=same; lg1; lg2;}
+  }
+  m7 -> lg1 [style=invis];
+}
