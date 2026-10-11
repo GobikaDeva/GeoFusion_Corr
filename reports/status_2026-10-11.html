@@ -1,0 +1,132 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>GeoFusionNet Status 2026-10-11</title>
+<style>
+@page { size: A4; margin: 16mm 15mm; }
+body { font-family: "DejaVu Sans", Arial, sans-serif; font-size: 9.6pt; color:#1d1d1f; line-height:1.42; background:#fff; }
+h1 { font-size: 17pt; margin:0 0 2px; }
+.sub { color:#666; margin-bottom:12px; }
+h2 { font-size: 12pt; border-bottom:1.5px solid #2b5797; padding-bottom:2px; margin:16px 0 6px; color:#2b5797; break-after: avoid; }
+h3 { font-size:10pt; margin:10px 0 4px; break-after: avoid; }
+table { border-collapse: collapse; width:100%; margin:4px 0 8px; font-size:8.8pt; break-inside: avoid; }
+th, td { border-bottom:1px solid #ddd; padding:3px 6px; text-align:left; vertical-align:top; }
+th { background:#f1f4f9; }
+td.n, th.n { text-align:right; font-variant-numeric: tabular-nums; }
+.box { background:#f6f8fb; border-left:3px solid #2b5797; padding:6px 10px; margin:6px 0; break-inside: avoid; }
+.warn { border-left-color:#c77c02; background:#fdf8ef; }
+ul { margin:3px 0 6px 18px; padding:0; } li { margin:1px 0; }
+.small { font-size:8.3pt; color:#555; }
+.pend { color:#b35c00; font-weight:bold; }
+b.good { color:#1e7b34; } b.bad { color:#b3261e; }
+</style></head><body>
+
+<h1>GeoFusionNet / GeoCorr: Status Report</h1>
+<div class="sub">Status as of 2026-10-11, 18:30 UTC (00:00 IST 10-12) · main @ e0c5337 (+ uncommitted --settings filter in scripts/fusion_sweep.py) · Prepared for Gobika S</div>
+
+<div class="box">
+<b>Conventions.</b> DTU test, 22 scans, 1600×1152, official protocol. Values are in mm; lower is better. Every "±" in this report is the population standard deviation over seeds (<b>ddof = 0</b>), for A0f and C1 alike. <span class="pend">PENDING</span> marks a number that has not been measured yet.
+</div>
+
+<!-- ===== STATUS: update when B2_nogeo seed 0 lands ===== -->
+<h2>1. Status</h2>
+<table>
+<tr><th>Item</th><th>State</th><th>Expected</th></tr>
+<tr><td><b>C1 3-seed eval</b> (B2_capacity s0, s1, s2)</td><td><b>Done</b> 2026-10-11 07:15 UTC</td><td>n/a</td></tr>
+<tr><td><b>Track 1 screen</b> (B2_mono_feat s2)</td><td><b>Done</b> 2026-10-11 11:07 UTC</td><td>n/a</td></tr>
+<tr><td><b>Fusion sweep, full grid</b> (A0f s2 vs C1 s2)<br><span class="small">scripts/queue_fusion_sweep.sh · runs/fusion_sweep/</span></td><td><b>Stopped</b> 2026-10-11 18:17 UTC after 6 of 44 model-scans (scan1, scan4, scan9 × 2 models); partial outputs kept. It ran at ~3.3–4 h per model-scan (projected end ~10-12 23:30 IST) and slowed training by ~2.4%.</td><td>n/a</td></tr>
+<tr><td><b>Fusion sweep, reduced</b> (distance only, n = 4)<br><span class="small">scripts/queue_fusion_sweep_dist_n4.sh · runs/fusion_sweep_dist_n4/</span></td><td>Running since 18:18 UTC, CPU only, 6 workers × 8 threads; the 6 finished model-scans are reused</td><td class="pend">~2026-10-11 22:00 UTC (03:30 IST 10-12), estimate</td></tr>
+<tr><td><b>B2_nogeo seed 0</b> (L_geo off, full chain)<br><span class="small">scripts/queue_b2_nogeo_seed0.sh · log runs/queue_b2_nogeo_seed0.log</span></td><td>Base training, step 10000/20000 at 18:17 UTC (2.10 s/step vs 2.05 on seed 2); then finetune 6k → final 1.5k → diagnostics → 1600×1152 eval (23 h 27 m on seed 2)</td><td class="pend">~2026-10-12 17:15–18:30 IST (PENDING)</td></tr>
+<tr><td>C1 placebo prior (E)</td><td>Prepared, <b>not launched</b> (by decision)</td><td>n/a</td></tr>
+</table>
+<p class="small">If B2_nogeo seed 0 has not been evaluated by 20:00 IST on 2026-10-12, this report is finalised with L_geo at n = 1.</p>
+<!-- ===== /STATUS ===== -->
+
+<h2>2. Headline: C1 vs Stage 0 (3 seeds each)</h2>
+<table>
+<tr><th>Model</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th></tr>
+<tr><td>A0f seed 0</td><td class="n">0.436</td><td class="n">0.558</td><td class="n">0.497</td></tr>
+<tr><td>A0f seed 1</td><td class="n">0.441</td><td class="n">0.555</td><td class="n">0.498</td></tr>
+<tr><td>A0f seed 2</td><td class="n">0.435</td><td class="n">0.524</td><td class="n">0.479</td></tr>
+<tr><td><b>A0f (Stage 0), mean ± std (ddof=0)</b></td><td class="n">0.437 ± 0.003</td><td class="n">0.545 ± 0.016</td><td class="n"><b>0.491 ± 0.009</b></td></tr>
+<tr><td>C1 seed 0</td><td class="n">0.470</td><td class="n">0.358</td><td class="n">0.414</td></tr>
+<tr><td>C1 seed 1</td><td class="n">0.487</td><td class="n">0.373</td><td class="n">0.430</td></tr>
+<tr><td>C1 seed 2</td><td class="n">0.474</td><td class="n">0.362</td><td class="n">0.418</td></tr>
+<tr><td><b>C1 (B2_capacity), mean ± std (ddof=0)</b></td><td class="n">0.477 ± 0.008</td><td class="n">0.364 ± 0.006</td><td class="n"><b>0.421 ± 0.007</b></td></tr>
+<tr><td>C1 − A0f</td><td class="n">+0.040</td><td class="n">−0.181</td><td class="n">−0.071</td></tr>
+</table>
+<p>C1 is better overall by 0.071 mm, about 14%, and the seed ranges do not overlap (C1 0.414–0.430, A0f 0.479–0.498). This is a trade, not a uniform gain. Completeness improves by 0.18 mm and accuracy gets 0.04 mm worse. The worst scans are the same as A0f's: scan48 (0.71–0.77), scan77, scan11, scan13 and scan49. On seed 2, C1 beats A0f on 17 of 22 scans. CL-MVSNet is not compared here. Our 0.438 number for CL-MVSNet comes from point clouds generated locally at 640×480, and the cause of its gap to the published 0.329 is unconfirmed.</p>
+
+<h2>3. Does C1's completeness gain survive a looser or stricter fusion? (reduced fusion sweep)</h2>
+<p>Both models' depth maps (seed 2 each, already dumped at 1600×1152) are re-fused and scored with the official metric. The full 32-setting grid was too slow (~3.3–4 h per model-scan), so it was stopped and replaced by a reduced sweep.</p>
+<p><b>Rule, fixed before any result was looked at:</b> all 22 scans; family <i>geo</i> (world-distance check) at distance 0.1 / <b>0.2</b> / 0.4 / 0.8 mm; consistent-view count fixed at the official 4; prob 0.3. That is the official setting (0.2 mm), one stricter and two looser. Estimated ~30–35 min per model-scan, 38 to run.</p>
+<div class="box"><b>What this sweep can support:</b> whether C1's completeness gain and accuracy loss over A0f depend on the fusion <i>distance</i> threshold, and a matched-point-count comparison along that one axis, for scans whose point counts overlap.<br>
+<b>What it cannot support:</b> any conclusion about the view-count threshold (2/3/6 views not run); any conclusion about MVSNet-style reprojection/relative-depth filters (not run); anything about the gap to CL-MVSNet (different checkpoint and resolution, not part of this sweep). It is single-seed (seed 2 of each model).</div>
+<table>
+<tr><th>Check</th><th class="n">A0f s2</th><th class="n">C1 s2</th><th>Note</th></tr>
+<tr><td>Reproduction of the official setting (geo 0.2 mm, 4 views) against eval_1600x1152.json, max |ΔOverall| over all 22 scans</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>Must be ~0</td></tr>
+<tr><td>Fused points, official setting (mean, M)</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td></td></tr>
+<tr><td>Comp at A0f's point count</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>C1 better on <span class="pend">PENDING</span> scans in range</td></tr>
+<tr><td>Comp at C1's point count</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>C1 better on <span class="pend">PENDING</span> scans in range</td></tr>
+<tr><td>Acc / Overall at matched counts</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td></td></tr>
+</table>
+<p><b>Verdict:</b> <span class="pend">PENDING</span>. The per-setting table will be in runs/fusion_sweep_dist_n4/report.log. The full-grid results for scan1, scan4 and scan9 stay in runs/fusion_sweep/ and are not used for the verdict, so all 22 scans are treated the same.</p>
+
+<h2>4. Track 1 screen: frozen mono features (B2_mono_feat seed 2)</h2>
+<table>
+<tr><th>Run (seed 2)</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th></tr>
+<tr><td>B2_nogeo (matched control)</td><td class="n">0.461</td><td class="n">0.410</td><td class="n">0.436</td></tr>
+<tr><td>B2_mono_feat</td><td class="n">0.464</td><td class="n">0.382</td><td class="n">0.423</td></tr>
+<tr><td>mono_feat − control</td><td class="n">+0.003</td><td class="n">−0.029</td><td class="n"><b>−0.013</b></td></tr>
+</table>
+<p><b>Screening result, not a confirmed gain.</b></p>
+<p><b>Matched setup (checked against configs and logs):</b></p>
+<ul>
+<li>Both runs are initialised from <b>runs/B2_nogeo_finetune/seed2/ckpt_final.pt</b> (the "initialized weights from" line is in both train.log files). Everything upstream of the final stage is the same checkpoint.</li>
+<li>Same final-stage budget: 1500 steps each, lr 5e-4, same data, batch and loss settings. The config diff (B2_nogeo.yaml vs B2_mono_feat.yaml) shows only the mono-feature input (frozen Depth-Anything-V2-Small, zero-initialised injection at coarse and mid), data.geometry_prior (mono_sparse vs none) and use_geo_term (true vs false).</li>
+<li><b>L_geo is off in both:</b> geo_weight 0.0 in both; the control has use_geo_term true with weight 0. B2 never reads the prior input, so the geometry_prior and use_geo_term differences do not change the computation.</li>
+<li>One budget difference: mono_feat has 12,480 more trainable parameters (2,133,939 vs 2,121,459, the injection layers), plus the frozen Depth-Anything model. Step time is about the same (4.17 vs 4.21 s/step).</li>
+</ul>
+<p><b>Result:</b></p>
+<ul>
+<li>ΔOverall −0.0127 (mono_feat − control), larger than 0.009.</li>
+<li>Better on only 11 of 22 scans.</li>
+<li>scan48 alone accounts for −0.155 (0.870 → 0.715). Without scan48, the mean difference over the other 21 scans is −0.006, below 0.009.</li>
+<li>Single seed.</li>
+<li>The gain is from completeness (−0.029); accuracy is slightly worse (+0.003).</li>
+</ul>
+<p>We read this as a screening signal concentrated on the ambiguous scan, not a confirmed gain. A second seed would be needed before Track 1 counts as a result.</p>
+<h3>Per-scan Overall (mm), seed 2</h3>
+<table>
+<tr><th>Scan</th><th class="n">Control (B2_nogeo)</th><th class="n">B2_mono_feat</th><th class="n">ΔAcc</th><th class="n">ΔComp</th><th class="n">ΔOverall</th></tr>
+<tr><td>scan1</td><td class="n">0.280</td><td class="n">0.281</td><td class="n">+0.002</td><td class="n">+0.000</td><td class="n">+0.001</td></tr><tr><td>scan4</td><td class="n">0.335</td><td class="n">0.343</td><td class="n">+0.008</td><td class="n">+0.008</td><td class="n">+0.008</td></tr><tr><td>scan9</td><td class="n">0.348</td><td class="n">0.357</td><td class="n">+0.014</td><td class="n">+0.004</td><td class="n">+0.009</td></tr><tr><td>scan10</td><td class="n">0.298</td><td class="n">0.303</td><td class="n">+0.009</td><td class="n">+0.001</td><td class="n">+0.005</td></tr><tr><td>scan11</td><td class="n">0.681</td><td class="n">0.617</td><td class="n">+0.003</td><td class="n">−0.131</td><td class="n">−0.064</td></tr><tr><td>scan12</td><td class="n">0.339</td><td class="n">0.342</td><td class="n">+0.011</td><td class="n">−0.006</td><td class="n">+0.003</td></tr><tr><td>scan13</td><td class="n">0.521</td><td class="n">0.510</td><td class="n">+0.026</td><td class="n">−0.048</td><td class="n">−0.011</td></tr><tr><td>scan15</td><td class="n">0.323</td><td class="n">0.334</td><td class="n">+0.017</td><td class="n">+0.006</td><td class="n">+0.011</td></tr><tr><td>scan23</td><td class="n">0.311</td><td class="n">0.321</td><td class="n">+0.014</td><td class="n">+0.006</td><td class="n">+0.010</td></tr><tr><td>scan24</td><td class="n">0.325</td><td class="n">0.344</td><td class="n">+0.015</td><td class="n">+0.022</td><td class="n">+0.019</td></tr><tr><td>scan29</td><td class="n">0.433</td><td class="n">0.419</td><td class="n">−0.025</td><td class="n">−0.003</td><td class="n">−0.014</td></tr><tr><td>scan32</td><td class="n">0.499</td><td class="n">0.442</td><td class="n">−0.004</td><td class="n">−0.109</td><td class="n">−0.057</td></tr><tr><td>scan33</td><td class="n">0.491</td><td class="n">0.491</td><td class="n">+0.004</td><td class="n">−0.005</td><td class="n">−0.000</td></tr><tr><td>scan34</td><td class="n">0.243</td><td class="n">0.239</td><td class="n">−0.004</td><td class="n">−0.004</td><td class="n">−0.004</td></tr><tr><td>scan48</td><td class="n">0.870</td><td class="n">0.715</td><td class="n">−0.006</td><td class="n">−0.305</td><td class="n"><b>−0.155</b></td></tr><tr><td>scan49</td><td class="n">0.589</td><td class="n">0.606</td><td class="n">+0.001</td><td class="n">+0.033</td><td class="n">+0.017</td></tr><tr><td>scan62</td><td class="n">0.570</td><td class="n">0.543</td><td class="n">−0.027</td><td class="n">−0.027</td><td class="n">−0.027</td></tr><tr><td>scan75</td><td class="n">0.381</td><td class="n">0.377</td><td class="n">+0.012</td><td class="n">−0.020</td><td class="n">−0.004</td></tr><tr><td>scan77</td><td class="n">0.740</td><td class="n">0.732</td><td class="n">+0.012</td><td class="n">−0.028</td><td class="n">−0.008</td></tr><tr><td>scan110</td><td class="n">0.397</td><td class="n">0.377</td><td class="n">−0.016</td><td class="n">−0.024</td><td class="n">−0.020</td></tr><tr><td>scan114</td><td class="n">0.261</td><td class="n">0.264</td><td class="n">+0.003</td><td class="n">+0.003</td><td class="n">+0.003</td></tr><tr><td>scan118</td><td class="n">0.347</td><td class="n">0.348</td><td class="n">+0.001</td><td class="n">−0.000</td><td class="n">+0.001</td></tr>
+<tr><td><b>Mean (22)</b></td><td class="n">0.436</td><td class="n">0.423</td><td class="n">+0.003</td><td class="n">−0.029</td><td class="n"><b>−0.013</b></td></tr>
+</table>
+<p class="small">Δ = mono_feat − control; negative is better. mono_feat is better on 11 of 22 scans.</p>
+
+<!-- ===== LGEO: update when B2_nogeo seed 0 lands (scripts/aggregate_lgeo_pairs.py) ===== -->
+<h2>5. L_geo on/off: C1 vs B2_nogeo (full chain, L_geo off in every phase)</h2>
+<div class="box warn"><b>L_geo: n = 1, second seed pending.</b></div>
+<table>
+<tr><th>Seed</th><th>Run</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th><th class="n">Per-scan Overall wins (of 22)</th></tr>
+<tr><td rowspan="3">2</td><td>C1 (L_geo on, geo_weight 0.5)</td><td class="n">0.474</td><td class="n">0.362</td><td class="n">0.418</td><td class="n">11</td></tr>
+<tr><td>B2_nogeo (L_geo off)</td><td class="n">0.461</td><td class="n">0.410</td><td class="n">0.436</td><td class="n">11</td></tr>
+<tr><td>off − on</td><td class="n">−0.013</td><td class="n">+0.048</td><td class="n">+0.018</td><td></td></tr>
+<tr><td rowspan="3">0</td><td>C1 (L_geo on)</td><td class="n">0.470</td><td class="n">0.358</td><td class="n">0.414</td><td class="n pend">PENDING</td></tr>
+<tr><td>B2_nogeo (L_geo off)</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td></tr>
+<tr><td>off − on</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td></td></tr>
+<tr><td colspan="2"><b>Paired diff, mean ± std (ddof=0), n = 2</b></td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>same sign in both pairs: <span class="pend">PENDING</span></td></tr>
+</table>
+<p>On seed 2, turning L_geo off makes overall 0.018 mm worse. That would mean L_geo helps, but the effect is mixed:</p>
+<ul>
+<li>All of it comes from completeness (+0.048).</li>
+<li>Accuracy is 0.013 better with L_geo off.</li>
+<li>The scan wins split 11 / 11.</li>
+</ul>
+<p>With one seed we cannot tell this apart from seed-to-seed variation. C1's own seed spread is 0.414–0.430. The seed 0 pair decides whether "L_geo helps C1" can be claimed.</p>
+<!-- ===== /LGEO ===== -->
+
+<h2>6. Not run, by decision</h2>
+<ul>
+<li>C1 placebo prior (blurred, noisy and cross-scene G), configs prepared; patches/C1_placebo.patch not applied.</li>
+<li>No other GPU jobs until B2_nogeo seed 0 finishes.</li>
+</ul>
+</body></html>
