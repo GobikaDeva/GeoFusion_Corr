@@ -57,11 +57,17 @@ MVS_PX_REL = ((0.5, 0.001), (1.0, 0.001), (1.0, 0.01), (2.0, 0.01))
 NUM_CONSIST = (2, 3, 4, 6)
 
 
-def settings():
+def settings(keep=None):
+    """The full grid, or only the settings whose keys are in `keep` (--settings)."""
     out = []
     for n in NUM_CONSIST:
         out += [{"family": "geo", "dist": d, "n": n} for d in GEO_DIST]
         out += [{"family": "mvs", "px": px, "rel": rel, "n": n} for px, rel in MVS_PX_REL]
+    if keep:
+        unknown = set(keep) - {setting_key(s) for s in out}
+        if unknown:
+            raise ValueError(f"unknown settings: {sorted(unknown)}")
+        out = [s for s in out if setting_key(s) in keep]
     return out
 
 
@@ -148,7 +154,7 @@ def fuse_all_settings(depths, confs, projs, prob_thresh, sets, batch_size=7):
 
 
 def sweep_one(job):
-    name, scan, out_dir, threads = job
+    name, scan, out_dir, threads, keep = job
     torch.set_num_threads(threads)
     from evaluation.dtu_gt import load_scan_ground_truth
     from evaluation.eval_dtu import _scan_number, official_scan_metrics
@@ -163,7 +169,9 @@ def sweep_one(job):
     res = {"model": name, "scan": scan, "n_views": int(depth.shape[0]), "settings": {}}
     t_fuse = 0.0
     for n in NUM_CONSIST:  # one fusion pass per view count keeps ~8 point clouds in memory, not 32
-        sets = [s for s in settings() if s["n"] == n]
+        sets = [s for s in settings(keep) if s["n"] == n]
+        if not sets:
+            continue
         t1 = time.time()
         fused = fuse_all_settings(depth, conf, proj, GEOMVSNET_PROB_THRESH, sets)
         t_fuse += time.time() - t1
@@ -182,7 +190,7 @@ def sweep_one(job):
 
 def sweep(args):
     import multiprocessing as mp
-    jobs = [(n, s, args.out_dir, args.threads) for s in args.scans for n in MODELS]
+    jobs = [(n, s, args.out_dir, args.threads, args.settings) for s in args.scans for n in MODELS]
     if args.workers <= 1:
         for j in jobs:
             sweep_one(j)
@@ -198,7 +206,7 @@ def report(args):
     comparison: for each scan and each C1 setting, A0f's acc/comp interpolated (in log point
     count, within one family's curve at fixed n) to C1's point count, and the reverse."""
     R = {n: {s: json.load(open(os.path.join(args.out_dir, f"{n}_{s}.json"))) for s in args.scans} for n in MODELS}
-    keys = [setting_key(s) for s in settings()]
+    keys = [setting_key(s) for s in settings(args.settings)]
     official = {"A0f": "runs/A0f_fixes_only_short/seed2/eval_1600x1152.json", "C1": "runs/B2_capacity/seed2/eval_1600x1152.json"}
     for n, p in official.items():
         ref = json.load(open(p))["per_scan"]
@@ -257,6 +265,8 @@ def main():
     p.add_argument("--max_views", type=int, default=0, help="smoke test only")
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--threads", type=int, default=8)
+    p.add_argument("--settings", nargs="+", default=None,
+                   help="sweep/report only these setting keys (e.g. geo_d0.2_n4); default: full grid")
     args = p.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
     {"dump": dump, "sweep": sweep, "report": report}[args.step](args)
