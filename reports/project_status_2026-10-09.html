@@ -45,7 +45,7 @@ b.good { color:#1e7b34; } b.bad { color:#b3261e; }
   <text x="0" y="48">A0f Stage 0, 3-seed mean</text>
   <text x="0" y="74">A0f seed 2</text>
   <text x="0" y="100">A0f seed 2 + disagr. gate</text>
-  <text x="0" y="126">CL-MVSNet plys (our eval)</text>
+  <text x="0" y="126">CL-MVSNet, local 640×480 plys</text>
   <text x="0" y="152">B2 seed 2</text>
   <text x="0" y="178">B2 seed 2 + gate</text>
   <text x="0" y="204">B2 seed 0</text>
@@ -70,7 +70,7 @@ b.good { color:#1e7b34; } b.bad { color:#b3261e; }
 <tr><td>A0 (pre-fix)</td><td class="n">0.447</td><td class="n">0.586</td><td class="n">0.517</td><td>Superseded</td></tr>
 <tr><td><b>A0f Stage 0</b> (3 seeds)</td><td class="n">0.437 ± 0.003</td><td class="n">0.545 ± 0.016</td><td class="n"><b>0.491 ± 0.009</b></td><td>Frozen baseline (std over seeds, ddof=0)</td></tr>
 <tr><td>A0f seed 2</td><td class="n">0.435</td><td class="n">0.523</td><td class="n">0.479</td><td>Reference for single-seed tests</td></tr>
-<tr><td>CL-MVSNet released plys</td><td class="n"></td><td class="n"></td><td class="n">0.438</td><td>Scored with our evaluator (paper reports 0.329 under its own fusion)</td></tr>
+<tr><td>CL-MVSNet, local 640×480 plys</td><td class="n">0.446</td><td class="n">0.431</td><td class="n">0.438</td><td>CL-MVSNet point clouds generated locally at 640×480 from CL-MVSNet's released checkpoint (not released point clouds), scored with our evaluator. Published: 0.329. The 0.438 vs 0.329 gap mixes test resolution (640×480 here vs the 1184×1600 set in CL-MVSNet's test script), the evaluation crop, fusion thresholds and checkpoint differences; its cause is unconfirmed. Not a like-for-like comparison with our models.</td></tr>
 <tr><td>B2_capacity seed 2</td><td class="n">0.473</td><td class="n">0.362</td><td class="n">0.418</td><td>Better than A0f s2 on 17/22 scans</td></tr>
 <tr><td>B2_capacity seed 0</td><td class="n">0.470</td><td class="n">0.358</td><td class="n">0.414</td><td>New, 2026-10-09</td></tr>
 <tr><td>B2_capacity seed 1</td><td colspan="4">Not measured yet (queued)</td></tr>

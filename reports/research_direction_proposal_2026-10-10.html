@@ -134,9 +134,9 @@ We propose to change the paper's thesis to match: <b>monocular foundation models
 <tr><th>Model (our evaluator, 22 scans, 1600×1152)</th><th class="n">Acc</th><th class="n">Comp</th><th class="n">Overall</th><th>Notes</th></tr>
 <tr><td>A0 (before cost-volume fixes)</td><td class="n">0.447</td><td class="n">0.586</td><td class="n">0.517</td><td>Superseded</td></tr>
 <tr><td><b>A0f Stage 0</b>, 3 seeds</td><td class="n">0.437 ± 0.003</td><td class="n">0.545 ± 0.016</td><td class="n"><b>0.491 ± 0.009</b></td><td>Seeds: 0.497 / 0.498 / 0.479</td></tr>
-<tr><td>CL-MVSNet released point clouds</td><td class="n"></td><td class="n"></td><td class="n">0.438</td><td>Their published plys, scored with our evaluator</td></tr>
+<tr><td>CL-MVSNet, local 640×480 point clouds</td><td class="n">0.446</td><td class="n">0.431</td><td class="n">0.438</td><td>CL-MVSNet point clouds generated locally at 640×480 from CL-MVSNet's released checkpoint (not released point clouds), scored with our evaluator</td></tr>
 </table>
-<div class="box warn"><b>Comparability.</b> CL-MVSNet reports 0.329 in its paper, but its released point clouds score 0.438 under our evaluator. The difference comes from fusion: CL-MVSNet uses a per-scan tuned filter (confidence 0.8, 3 source views, relative depth 0.001). So <b>our numbers can be compared with 0.438, not with published figures.</b> A paper submission needs both: our fixed protocol and the fusion used by the published methods (work item E9, Section 10).</div>
+<div class="box warn"><b>Comparability.</b> CL-MVSNet reports 0.329 in its paper. CL-MVSNet point clouds generated locally at 640×480 from CL-MVSNet's released checkpoint (not released point clouds) score 0.438 under our evaluator. The 0.438 vs 0.329 gap mixes test resolution (640×480 here vs the 1184×1600 set in CL-MVSNet's test script), the evaluation crop, fusion thresholds and checkpoint differences; its cause is unconfirmed. CL-MVSNet's fusion uses a per-scan tuned filter (confidence 0.8, 3 source views, relative depth 0.001), which is one of these candidates. <b>Neither 0.438 nor 0.329 is a like-for-like reference for our numbers.</b> A paper submission needs both: our fixed protocol and the fusion used by the published methods (work item E9, Section 10).</div>
 
 <h2>4. What was done, from the start</h2>
 <table>
@@ -173,7 +173,7 @@ We propose to change the paper's thesis to match: <b>monocular foundation models
   <text x="0" y="22">A0 (before fixes)</text>
   <text x="0" y="48">A0f Stage 0, 3-seed mean</text>
   <text x="0" y="74">A0f seed 2</text>
-  <text x="0" y="100">CL-MVSNet plys (our evaluator)</text>
+  <text x="0" y="100">CL-MVSNet, local 640×480 plys</text>
   <text x="0" y="126">B2_nogeo seed 2 (no L_geo)</text>
   <text x="0" y="152">B2 seed 2</text>
   <text x="0" y="178">B2 seed 0</text>
@@ -344,7 +344,7 @@ We propose to change the paper's thesis to match: <b>monocular foundation models
 <li>a fair comparison table: our protocol plus the published fusion protocol, with published and reproduced numbers kept separate;</li>
 <li>generalization to Tanks and Temples.</li>
 </ul>
-Under our evaluator, B2 already beats CL-MVSNet's released point clouds (0.414/0.418 vs 0.438). Whether that holds under the published fusion protocol is <b>not yet measured</b> (E9).
+We make no comparison claim against CL-MVSNet. The 0.438 comes from CL-MVSNet point clouds generated locally at 640×480 from CL-MVSNet's released checkpoint (not released point clouds). The 0.438 vs 0.329 gap mixes test resolution (640×480 here vs the 1184×1600 set in CL-MVSNet's test script), the evaluation crop, fusion thresholds and checkpoint differences; its cause is unconfirmed. A like-for-like comparison is <b>not yet measured</b> (E9).
 </div>
 <div class="box warn"><b>Fallback if G1 or G2 fails.</b> The diagnosis remains publishable together with the capacity and L_geo findings. That would make an analysis paper ("why photometric self-supervision fails on ambiguous surfaces, and what monocular priors can and cannot fix"), with C2 and C3 as the measured remedies. This is a weaker but honest outcome, and it reuses all experiments already done.</div>
 
@@ -353,7 +353,7 @@ Under our evaluator, B2 already beats CL-MVSNet's released point clouds (0.414/0
 <tr><th style="width:5%">ID</th><th style="width:33%">Risk</th><th>Mitigation</th></tr>
 <tr><td>R1</td><td>C4's idea is already published (the field moves fast; MonoMVSNet and DFM-MVS are close)</td><td>E0 before implementation; position the paper on the self-supervised, ambiguity-targeted angle and the diagnosis</td></tr>
 <tr><td>R2</td><td>The single-seed L_geo effect (0.018) does not replicate</td><td>E3 (G0) before C4 is built on it</td></tr>
-<tr><td>R3</td><td>Our absolute numbers look weak next to published ones (0.41 vs 0.33) because of fusion differences</td><td>E9: report both protocols, and score the published plys with our evaluator (already done for CL-MVSNet)</td></tr>
+<tr><td>R3</td><td>Our absolute numbers look weak next to published ones (0.41 vs 0.33). The 0.438 vs 0.329 gap mixes test resolution (640×480 here vs the 1184×1600 set in CL-MVSNet's test script), the evaluation crop, fusion thresholds and checkpoint differences; its cause is unconfirmed.</td><td>E9: report both protocols, and re-run CL-MVSNet at its scripted resolution under both fusions (only the local 640×480 plys have been scored so far)</td></tr>
 <tr><td>R4</td><td>B2 fuses better while per-view depth is worse; the mechanism is not understood</td><td>Report it honestly; add per-view depth metrics to every table; investigate if reviewers are likely to ask</td></tr>
 <tr><td>R5</td><td>The ambiguity mask becomes self-reinforcing (the network learns to hide ties)</td><td>Compute the mask from a detached probability volume; random-mask and shuffled-prior controls (E8); monitor competing-dip share over training</td></tr>
 <tr><td>R6</td><td>The monocular model's training data leaks geometry knowledge, so the self-supervised claim is questioned</td><td>Describe the method as "self-supervised MVS with an auxiliary pretrained monocular prior", as MonoMVSNet and DFM-MVS do; give the prior's provenance</td></tr>
