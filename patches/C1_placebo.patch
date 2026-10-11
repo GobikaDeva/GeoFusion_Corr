@@ -1,0 +1,62 @@
+--- a/data/datasets/dtu.py	2026-10-11 06:10:38.234594032 +0000
++++ b/data/datasets/dtu.py	2026-10-11 06:10:54.510617846 +0000
+@@ -119,6 +119,15 @@
+         if self.geometry_prior not in ("none", "mono_sparse"):
+             raise ValueError(f"Unknown geometry_prior: {self.geometry_prior}")
+         self.prior_root = cfg.get("prior_root", os.path.join(root, "MonoPrior"))
++        # Placebo priors for the L_geo control (C1_placebo_*): replace G, in the train
++        # split only, by a degraded version. Fixed per (scan, view), so the target is a
++        # consistent wrong prior and not noise that averages out over epochs.
++        #   {type: blur,   sigma_px}           Gaussian blur inside the valid mask
++        #   {type: noise,  rel_std, corr_px}   G * (1 + smooth field), field std rel_std
++        #   {type: xscene}                      G of another train scan, same view index
++        self.prior_placebo = cfg.get("prior_placebo") if split == "train" else None
++        if self.prior_placebo and self.prior_placebo["type"] not in ("blur", "noise", "xscene"):
++            raise ValueError(f"Unknown prior_placebo: {self.prior_placebo}")
+ 
+         # Build CL-MVSNet consistency inputs (set by training/train.py when
+         # loss.consistency is enabled).
+@@ -190,6 +199,11 @@
+         """Returns (ref_geom (4, H, W), prior_depth (1, H, W) mm, prior_valid (1, H, W)).
+         `intrinsic` must already be scaled to img_wh."""
+         target_w, target_h = self.img_wh
++        placebo = self.prior_placebo
++        if placebo and placebo["type"] == "xscene":
++            # fixed derangement: the scan half the train list away, same view index
++            scans = self._scan_list()
++            scan = scans[(scans.index(scan) + len(scans) // 2) % len(scans)]
+         path = self._prior_path(scan, view)
+         if not os.path.exists(path):
+             raise FileNotFoundError(
+@@ -197,6 +211,8 @@
+                 "then scripts/anchor_mono_prior.py."
+             )
+         prior = np.load(path).astype(np.float32)
++        if placebo and placebo["type"] in ("blur", "noise"):
++            prior = self._placebo_prior(prior, scan, view, placebo)
+         valid = cv2.resize((prior > 0).astype(np.uint8), (target_w, target_h), interpolation=cv2.INTER_NEAREST) > 0
+         prior = cv2.resize(prior, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+         valid &= prior > 0
+@@ -211,6 +227,22 @@
+             torch.from_numpy(valid.astype(np.float32)).unsqueeze(0),
+         )
+ 
++    @staticmethod
++    def _placebo_prior(prior: np.ndarray, scan: str, view: int, placebo: dict) -> np.ndarray:
++        """Blur or smooth-noise placebo of G at the cached prior's resolution; the valid
++        mask (prior > 0) is unchanged."""
++        valid = (prior > 0).astype(np.float32)
++        if placebo["type"] == "blur":
++            s = float(placebo["sigma_px"])
++            num = cv2.GaussianBlur(prior * valid, (0, 0), s, borderType=cv2.BORDER_REFLECT)
++            den = cv2.GaussianBlur(valid, (0, 0), s, borderType=cv2.BORDER_REFLECT)
++            return np.where(valid > 0, num / np.maximum(den, 1e-6), 0.0).astype(np.float32)
++        seed = (int(scan.lstrip("scan").split("_")[0]) * 1000 + view) & 0x7FFFFFFF
++        field = np.random.default_rng(seed).standard_normal(prior.shape).astype(np.float32)
++        field = cv2.GaussianBlur(field, (0, 0), float(placebo["corr_px"]), borderType=cv2.BORDER_REFLECT)
++        field *= float(placebo["rel_std"]) / max(float(field.std()), 1e-6)
++        return (prior * (1.0 + field) * valid).astype(np.float32)
++
+     def _load_image(self, path: str) -> np.ndarray:
+         img = cv2.imread(path, cv2.IMREAD_COLOR)
+         if img is None:
