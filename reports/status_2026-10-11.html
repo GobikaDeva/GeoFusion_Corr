@@ -20,7 +20,7 @@ b.good { color:#1e7b34; } b.bad { color:#b3261e; }
 </style></head><body>
 
 <h1>GeoFusionNet / GeoCorr: Status Report</h1>
-<div class="sub">Status as of 2026-10-11, 18:30 UTC (00:00 IST 10-12) · main @ e0c5337 (+ uncommitted --settings filter in scripts/fusion_sweep.py) · Prepared for Gobika S</div>
+<div class="sub">Status as of 2026-10-11, 20:40 UTC (02:10 IST 10-12) · main @ edf0765 · Prepared for Gobika S</div>
 
 <div class="box">
 <b>Conventions.</b> DTU test, 22 scans, 1600×1152, official protocol. Values are in mm; lower is better. Every "±" in this report is the population standard deviation over seeds (<b>ddof = 0</b>), for A0f and C1 alike. <span class="pend">PENDING</span> marks a number that has not been measured yet.
@@ -33,7 +33,7 @@ b.good { color:#1e7b34; } b.bad { color:#b3261e; }
 <tr><td><b>C1 3-seed eval</b> (B2_capacity s0, s1, s2)</td><td><b>Done</b> 2026-10-11 07:15 UTC</td><td>n/a</td></tr>
 <tr><td><b>Track 1 screen</b> (B2_mono_feat s2)</td><td><b>Done</b> 2026-10-11 11:07 UTC</td><td>n/a</td></tr>
 <tr><td><b>Fusion sweep, full grid</b> (A0f s2 vs C1 s2)<br><span class="small">scripts/queue_fusion_sweep.sh · runs/fusion_sweep/</span></td><td><b>Stopped</b> 2026-10-11 18:17 UTC after 6 of 44 model-scans (scan1, scan4, scan9 × 2 models); partial outputs kept. It ran at ~3.3–4 h per model-scan (projected end ~10-12 23:30 IST) and slowed training by ~2.4%.</td><td>n/a</td></tr>
-<tr><td><b>Fusion sweep, reduced</b> (distance only, n = 4)<br><span class="small">scripts/queue_fusion_sweep_dist_n4.sh · runs/fusion_sweep_dist_n4/</span></td><td>Running since 18:18 UTC, CPU only, 6 workers × 8 threads; the 6 finished model-scans are reused</td><td class="pend">~2026-10-11 22:00 UTC (03:30 IST 10-12), estimate</td></tr>
+<tr><td><b>Fusion sweep, reduced</b> (distance only, n = 4)<br><span class="small">scripts/queue_fusion_sweep_dist_n4.sh · runs/fusion_sweep_dist_n4/</span></td><td><b>Done</b> 2026-10-11 20:35 UTC; see section 3</td><td>n/a</td></tr>
 <tr><td><b>B2_nogeo seed 0</b> (L_geo off, full chain)<br><span class="small">scripts/queue_b2_nogeo_seed0.sh · log runs/queue_b2_nogeo_seed0.log</span></td><td>Base training, step 10000/20000 at 18:17 UTC (2.10 s/step vs 2.05 on seed 2); then finetune 6k → final 1.5k → diagnostics → 1600×1152 eval (23 h 27 m on seed 2)</td><td class="pend">~2026-10-12 17:15–18:30 IST (PENDING)</td></tr>
 <tr><td>C1 placebo prior (E)</td><td>Prepared, <b>not launched</b> (by decision)</td><td>n/a</td></tr>
 </table>
@@ -62,13 +62,23 @@ b.good { color:#1e7b34; } b.bad { color:#b3261e; }
 <b>What it cannot support:</b> any conclusion about the view-count threshold (2/3/6 views not run); any conclusion about MVSNet-style reprojection/relative-depth filters (not run); anything about the gap to CL-MVSNet (different checkpoint and resolution, not part of this sweep). It is single-seed (seed 2 of each model).</div>
 <table>
 <tr><th>Check</th><th class="n">A0f s2</th><th class="n">C1 s2</th><th>Note</th></tr>
-<tr><td>Reproduction of the official setting (geo 0.2 mm, 4 views) against eval_1600x1152.json, max |ΔOverall| over all 22 scans</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>Must be ~0</td></tr>
-<tr><td>Fused points, official setting (mean, M)</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td></td></tr>
-<tr><td>Comp at A0f's point count</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>C1 better on <span class="pend">PENDING</span> scans in range</td></tr>
-<tr><td>Comp at C1's point count</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td>C1 better on <span class="pend">PENDING</span> scans in range</td></tr>
-<tr><td>Acc / Overall at matched counts</td><td class="n pend">PENDING</td><td class="n pend">PENDING</td><td></td></tr>
+<tr><td>Reproduction of the official setting (geo 0.2 mm, 4 views) against eval_1600x1152.json, max |ΔOverall| over all 22 scans</td><td class="n">0.0047</td><td class="n">0.0009</td><td>Small but not exactly 0; well below the differences discussed here</td></tr>
+<tr><td>Fused points, official setting (mean, M)</td><td class="n">22.05</td><td class="n">22.34</td><td>C1 fuses ~1% more points</td></tr>
+<tr><td>Comp at A0f's point count</td><td class="n">0.524</td><td class="n">0.370</td><td>C1 better on 22/22 scans (22/22 in range)</td></tr>
+<tr><td>Comp at C1's point count</td><td class="n">0.511</td><td class="n">0.362</td><td>C1 better on 22/22 scans (22/22 in range)</td></tr>
+<tr><td>Acc at A0f's / C1's point count</td><td class="n">0.435 / 0.449</td><td class="n">0.471 / 0.473</td><td>C1 better on 3/22 and 5/22 scans</td></tr>
+<tr><td>Overall at A0f's / C1's point count</td><td class="n">0.480 / 0.480</td><td class="n">0.420 / 0.418</td><td>C1 better on 16/22 and 17/22 scans</td></tr>
 </table>
-<p><b>Verdict:</b> <span class="pend">PENDING</span>. The per-setting table will be in runs/fusion_sweep_dist_n4/report.log. The full-grid results for scan1, scan4 and scan9 stay in runs/fusion_sweep/ and are not used for the verdict, so all 22 scans are treated the same.</p>
+<h3>Per-setting means over 22 scans (geo, 4 views)</h3>
+<table>
+<tr><th>Distance</th><th class="n">A0f Mpts</th><th class="n">A0f Acc</th><th class="n">A0f Comp</th><th class="n">A0f Overall</th><th class="n">C1 Mpts</th><th class="n">C1 Acc</th><th class="n">C1 Comp</th><th class="n">C1 Overall</th></tr>
+<tr><td>0.1 mm</td><td class="n">13.33</td><td class="n">0.364</td><td class="n">0.703</td><td class="n">0.534</td><td class="n">13.76</td><td class="n">0.376</td><td class="n">0.483</td><td class="n">0.429</td></tr>
+<tr><td><b>0.2 mm (official)</b></td><td class="n">22.05</td><td class="n">0.435</td><td class="n">0.524</td><td class="n">0.480</td><td class="n">22.34</td><td class="n">0.473</td><td class="n">0.362</td><td class="n">0.418</td></tr>
+<tr><td>0.4 mm</td><td class="n">29.70</td><td class="n">0.544</td><td class="n">0.410</td><td class="n">0.477</td><td class="n">30.32</td><td class="n">0.620</td><td class="n">0.293</td><td class="n">0.457</td></tr>
+<tr><td>0.8 mm</td><td class="n">35.82</td><td class="n">0.714</td><td class="n">0.338</td><td class="n">0.526</td><td class="n">37.12</td><td class="n">0.838</td><td class="n">0.257</td><td class="n">0.547</td></tr>
+</table>
+<p><b>Verdict (distance threshold only, seed 2 only):</b> C1's completeness gain is not an artefact of the distance threshold. At matched point counts C1 has better completeness on every one of the 22 scans, and its accuracy is worse on most scans (C1 better on only 3–5 of 22). So the trade-off is a property of the depth maps, not of how many points the fusion keeps. C1 is better overall at 0.1, 0.2 and 0.4 mm. At 0.8 mm it is worse (0.547 vs 0.526), because its accuracy degrades faster as the threshold loosens. Taking each model's best setting here would be chosen on the test set, so it is not reported as a result. This says nothing about the view-count threshold, MVSNet-style filters or the CL-MVSNet gap (see the box above).</p>
+<p class="small">Full output: runs/fusion_sweep_dist_n4/report.log. The full-grid results for scan1, scan4 and scan9 in runs/fusion_sweep/ are not used. Sweep finished 2026-10-11 20:35 UTC (~17–23 min per model-scan, far faster than the full grid).</p>
 
 <h2>4. Track 1 screen: frozen mono features (B2_mono_feat seed 2)</h2>
 <table>
